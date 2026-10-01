@@ -9,8 +9,9 @@ the agent one place to put things instead: a browser tab you keep open, where
 every result appears at the top as it is made, side by side with the
 alternatives, and stays there.
 
-You mark files **adopted** or **rejected**, answer the agent's questions ("which
-of these three?", a whole design review) and write comments right on the page.
+You reply to what it shows — **OK**, or a note — and answer its questions ("which
+of these three?", "which pattern?", a whole design review) right on the page: pick,
+press **Send**, add a note only if you want to.
 Those come back to the agent — even while it is idle — so the review loop runs
 through the page instead of through copy-pasted paths and options typed in chat.
 
@@ -31,9 +32,9 @@ yesterday's renders and decides what to keep.
 - **The issue on screen** — above an issue's posts, its title, status, project and
   description, fetched by a command you choose (Linear, GitHub, …) or written by
   the agent.
-- **Questions** — `agent-dailies ask` turns files and sentences into options
-  A, B, C… to pick from, or takes a whole review sheet of decisions; your answers
-  wake the agent.
+- **Questions** — `agent-dailies ask` turns files, patterns made of several files,
+  and sentences into options A, B, C… to pick from, or takes a whole review sheet
+  of decisions; your answers wake the agent.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
   next message.
@@ -43,8 +44,8 @@ yesterday's renders and decides what to keep.
   desktop or a folder.
 - **Kept** — files are stored by content hash outside your repository, so they
   survive worktree cleanup and never bloat git.
-- **Keyboard first** — `j`/`k` posts, `h`/`l` files, `a` adopt, `x` reject,
-  `c` comment, `f` full screen, `1`–`9` choose an option, `Enter` send it,
+- **Keyboard first** — `j`/`k` posts, `h`/`l` files, `o` OK, `c` note,
+  `f` full screen, `1`–`9` choose an option, `Enter` send it,
   `y` copy (`Y` the path), `d` download, `[`/`]` move through the sidebar, `/` search.
 
 ## Install
@@ -100,18 +101,19 @@ When it needs a decision, it asks:
 ```sh
 agent-dailies ask "Which front view do we keep?" a.png b.png --option "Neither — redraw it" \
   --why "B matches the back view best; A loses the cape."
+agent-dailies ask "Which palette?" --pattern "Current" c_front.png c_back.png --pattern "Warmer" w_front.png w_back.png
 agent-dailies ask --file review.json      # several decisions at once (see the skill for the format)
 agent-dailies wait <post-id>              # in the background: exits with the answers
 ```
 
-You look, mark, answer and comment in the tab. The agent reads it back:
+You look, reply and answer in the tab. The agent reads it back:
 
 | Command | What it gives the agent |
 | --- | --- |
-| `agent-dailies context` | What you selected (or the newest post): files with readable paths, marks, answers, comments |
+| `agent-dailies context` | What you selected (or the newest post): files with readable paths, answers, replies |
 | `agent-dailies wait <post-id>` | Blocks until every question of a post is answered (or you comment on it), prints the answers, exits |
 | `agent-dailies watch` | Blocks until you comment on this session's posts, prints the feedback, exits. Run it in the background so your comment wakes the agent |
-| `agent-dailies feedback [--since 2h] [--all]` | Your marks, answers and comments for this worktree |
+| `agent-dailies feedback [--since 2h] [--all]` | Your replies and answers for this worktree |
 | `agent-dailies list [--all]` | Recent posts |
 | `agent-dailies get <item-id> [--to PATH]` | A stored file |
 
@@ -181,7 +183,8 @@ can describe an issue with `agent-dailies issue <KEY> --title … --description 
 ```text
 $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
   blobs/<ab>/<sha256><ext>           files, once per content
-  log/<machine>.jsonl                append-only events: post (with its questions), verdict, comment, answer, issue
+  log/<machine>.jsonl                append-only events: post (with its questions), comment, answer, issue
+                                     (and verdict: per-file marks from versions before 0.5)
   named/<item>/<original name>       hard links under the original names (copy path)
   derived/<sha256>.webm              videos converted for the browser
   sessions/<session>.json            what each agent session has been handed

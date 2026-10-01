@@ -95,6 +95,36 @@ test("ask posts a question, and wait exits with the answer", async () => {
 	assert.match(output, /answered: B \(No, redo it\) — "too dark"/);
 });
 
+test("ask groups the files after --pattern into one option", async () => {
+	const files = ["c1.png", "c2.png", "w1.png", "w2.png"].map((name) => writeFile(dir, name, PNG));
+	const asked = await run(["ask", "Which palette?", "--pattern", "Current", files[0]!, files[1]!, "--pattern", "Warmer", files[2]!, files[3]!, "--option", "Neither", "--json", "--no-open"]);
+	assert.equal(asked.code, 0, asked.stderr);
+	const { post } = JSON.parse(asked.stdout) as { post: { items: { id: string; name: string }[]; questions: { options: { key: string; label?: string; items: string[] }[] }[] } };
+	const names = new Map(post.items.map((item) => [item.id, item.name]));
+	assert.deepEqual(
+		post.questions[0]!.options.map((option) => [option.key, option.label, option.items.map((id) => names.get(id))]),
+		[
+			["A", "Current", ["c1.png", "c2.png"]],
+			["B", "Warmer", ["w1.png", "w2.png"]],
+			["C", "Neither", []],
+		],
+	);
+});
+
+test("the Stop hook does not ask to wait on a post the user already replied to", async () => {
+	const shown = await run(["show", writeFile(dir, "reply.png", PNG), "--json"]);
+	const { post, url } = JSON.parse(shown.stdout) as { post: { id: string }; url: string };
+	await fetch(`${new URL(url).origin}/api/comments`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ post: post.id, text: "OK", by: "human" }),
+	});
+	const stop = await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }));
+	// The OK is handed over (exit 2 with it) the first time, and then nothing is left to say.
+	assert.match(stop.stderr, /OK/);
+	assert.equal((await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }))).code, 0);
+});
+
 test("ask --file takes a review sheet with files relative to it", async () => {
 	writeFile(dir, "sketch.png", PNG);
 	const sheet = writeFile(

@@ -8,7 +8,7 @@
     {
       "name": "agent-dailies",
       "source": "./",
-      "description": "Show what the agent makes in one live browser tab, ask you to decide there, and bring your marks, answers and comments back to the agent"
+      "description": "Show what the agent makes in one live browser tab, ask you to decide there, and bring your replies and answers back to the agent"
     }
   ]
 }

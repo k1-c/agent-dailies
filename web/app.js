@@ -364,35 +364,10 @@
 		const tile = el("article", { class: "tile", "data-item": item.id, "data-verdict": item.verdict || null });
 		const stage = el("div", { class: "stage", "data-kind": item.kind }, [media(item)]);
 		if (post.items.length > 1) stage.append(el("span", { class: "index", text: String(index + 1) }));
-		const adopt = el("button", {
-			class: "act adopt",
-			type: "button",
-			"aria-pressed": String(item.verdict === "adopted"),
-			title: `${t.adopt} (a)`,
-			text: `✓ ${t.adopt}`,
-			onclick: (event) => {
-				event.stopPropagation();
-				toggleVerdict(post.id, item.id, "adopted");
-			},
-		});
-		const reject = el("button", {
-			class: "act reject",
-			type: "button",
-			"aria-pressed": String(item.verdict === "rejected"),
-			title: `${t.reject} (x)`,
-			text: `✕ ${t.reject}`,
-			onclick: (event) => {
-				event.stopPropagation();
-				toggleVerdict(post.id, item.id, "rejected");
-			},
-		});
 		const name = el("span", { class: "name", title: `${item.source || item.name}\n${t.dragHint}`, text: item.name });
 		makeDraggable(name, item);
 		if (item.kind !== "image") makeDraggable(stage, item);
-		tile.append(
-			stage,
-			el("div", { class: "tile-foot" }, [name, el("span", { class: "size", text: size(item.size) }), ...fileActions(post, item, { withFull: true }), adopt, reject]),
-		);
+		tile.append(stage, el("div", { class: "tile-foot" }, [name, el("span", { class: "size", text: size(item.size) }), ...fileActions(post, item, { withFull: true })]));
 		tile.addEventListener("click", () => select(post.id, item.id));
 		tile.addEventListener("dblclick", (event) => {
 			if (event.target.closest("model-viewer, video, audio, pre, iframe")) return;
@@ -402,10 +377,10 @@
 		return tile;
 	}
 
+	// Marks from earlier versions (or the API) still show as a badge; the page
+	// itself now asks for decisions per question, not per file.
 	function applyVerdict(tile, verdict) {
 		tile.dataset.verdict = verdict || "";
-		tile.querySelector(".act.adopt").setAttribute("aria-pressed", String(verdict === "adopted"));
-		tile.querySelector(".act.reject").setAttribute("aria-pressed", String(verdict === "rejected"));
 		tile.querySelector(".badge")?.remove();
 		if (verdict) tile.querySelector(".stage").append(el("span", { class: `badge ${verdict}`, text: t[verdict] }));
 	}
@@ -540,13 +515,23 @@
 				]),
 			);
 			if (option.body) card.append(el("div", { class: "o-body" }, [markdown(option.body)]));
-			for (const item of items) {
-				const stage = el("div", { class: "stage", "data-kind": item.kind, "data-item": item.id }, [media(item)]);
-				stage.addEventListener("dblclick", (event) => {
-					if (event.target.closest("model-viewer, video, audio, pre, iframe")) return;
-					openLightbox(post.id, item.id);
-				});
-				card.append(stage);
+			if (items.length) {
+				const files = el("div", { class: "o-files", "data-count": String(Math.min(items.length, 3)) });
+				for (const item of items) {
+					const stage = el("div", { class: "stage", "data-kind": item.kind, "data-item": item.id }, [media(item)]);
+					stage.addEventListener("dblclick", (event) => {
+						if (event.target.closest("model-viewer, video, audio, pre, iframe")) return;
+						openLightbox(post.id, item.id);
+					});
+					const label = el("div", { class: "o-file" }, [stage]);
+					if (items.length > 1) {
+						const caption = el("div", { class: "o-file-name" }, [el("span", { class: "name", text: item.name }), ...fileActions(post, item)]);
+						makeDraggable(caption.querySelector(".name"), item);
+						label.append(caption);
+					}
+					files.append(label);
+				}
+				card.append(files);
 			}
 			const toggle = () => {
 				choose(post, question, option.id);
@@ -728,22 +713,44 @@
 
 		const list = el("div", { class: "comment-list" });
 		for (const comment of post.comments || []) list.append(buildComment(post, comment));
-		const target = el("span", { class: "target" });
-		const input = el("input", { type: "text", placeholder: t.commentPlaceholder, "aria-label": t.commentPlaceholder });
-		input.addEventListener("keydown", async (event) => {
-			if (event.key !== "Enter" || event.isComposing || !input.value.trim()) return;
-			event.preventDefault();
-			const text = input.value.trim();
-			input.value = "";
-			const { item } = composeTarget(post);
-			try {
-				await api("/api/comments", { post: post.id, item, text, by: "human" });
-			} catch (error) {
-				input.value = text;
-				console.error(error);
-			}
-		});
-		node.append(el("div", { class: "comments" }, [list, el("div", { class: "compose" }, [target, input])]));
+		const parts = [list];
+		// A post that asks questions is answered per question; others get a reply row:
+		// "OK" with nothing written, "Send" once there is a note.
+		if (!post.questions?.length) {
+			const target = el("span", { class: "target" });
+			const input = el("input", { type: "text", class: "reply-note", placeholder: t.replyPlaceholder, "aria-label": t.replyPlaceholder });
+			const send = el("button", { class: "send reply", type: "button", text: t.ok });
+			const sync = () => (send.textContent = input.value.trim() ? t.send : t.ok);
+			const reply = async () => {
+				const text = input.value.trim() || "OK";
+				input.value = "";
+				sync();
+				const { item } = composeTarget(post);
+				try {
+					await api("/api/comments", { post: post.id, item, text, by: "human" });
+					toast(t.sent);
+				} catch (error) {
+					input.value = text === "OK" ? "" : text;
+					sync();
+					console.error(error);
+				}
+			};
+			input.addEventListener("input", sync);
+			input.addEventListener("keydown", (event) => {
+				if (event.key !== "Enter" || event.isComposing || !input.value.trim()) return;
+				event.preventDefault();
+				reply();
+			});
+			send.addEventListener("click", (event) => {
+				event.stopPropagation();
+				reply();
+			});
+			parts.push(el("div", { class: "compose" }, [target, input, send]));
+		}
+		const comments = el("div", { class: "comments" }, parts);
+		// Nothing to show yet and no reply row (a question post): no empty strip.
+		comments.hidden = !list.childElementCount && parts.length === 1;
+		node.append(comments);
 		node.addEventListener("click", (event) => {
 			if (!event.target.closest(".tile") && !event.target.closest(".compose")) select(post.id, selection?.post === post.id ? selection.item : undefined);
 		});
@@ -754,7 +761,15 @@
 
 	function updateCompose(node, post) {
 		const target = node.querySelector(".compose .target");
-		target.textContent = composeTarget(post).label;
+		if (target) target.textContent = composeTarget(post).label;
+	}
+
+	// "OK" from the keyboard for the post in hand (one that asks nothing).
+	function replyOk(post) {
+		if (!post || post.questions?.length) return;
+		api("/api/comments", { post: post.id, text: "OK", by: "human" })
+			.then(() => toast(t.sent))
+			.catch((error) => console.error(error));
 	}
 
 	// ---- state changes ----
@@ -793,27 +808,15 @@
 		}
 	}
 
-	async function toggleVerdict(postId, itemId, verdict) {
-		const post = posts.get(postId);
-		const item = post?.items.find((candidate) => candidate.id === itemId);
-		if (!item) return;
-		const next = item.verdict === verdict ? null : verdict;
-		const previous = item.verdict;
-		setVerdict(itemId, next);
-		try {
-			await api("/api/verdicts", { item: itemId, verdict: next, by: "human" });
-		} catch (error) {
-			setVerdict(itemId, previous);
-			console.error(error);
-		}
-	}
-
 	function addComment(comment) {
 		const post = posts.get(comment.post);
 		if (!post) return;
 		if ((post.comments || []).some((existing) => existing.id === comment.id)) return;
 		post.comments = [...(post.comments || []), comment];
-		document.getElementById(post.id)?.querySelector(".comment-list").append(buildComment(post, comment));
+		const node = document.getElementById(post.id);
+		node?.querySelector(".comment-list").append(buildComment(post, comment));
+		const box = node?.querySelector(".comments");
+		if (box) box.hidden = false;
 	}
 
 	function applySelection(next) {
@@ -1225,7 +1228,6 @@
 			if (event.key === "Escape") closeLightbox();
 			else if (event.key === "ArrowRight" || event.key === "l") stepLightbox(1);
 			else if (event.key === "ArrowLeft" || event.key === "h") stepLightbox(-1);
-			else if ((event.key === "a" || event.key === "x") && selection?.item) toggleVerdict(selection.post, selection.item, event.key === "a" ? "adopted" : "rejected");
 			else if ((event.key === "y" || event.key === "Y") && selectedItem()) copyItem(selectedItem(), event.key === "Y");
 			else if (event.key === "d" && selectedItem()) downloadItem(selectedItem());
 			else return;
@@ -1249,9 +1251,8 @@
 			case "h":
 				moveSelection(0, -1);
 				break;
-			case "a":
-			case "x":
-				if (selection?.item) toggleVerdict(selection.post, selection.item, event.key === "a" ? "adopted" : "rejected");
+			case "o":
+				replyOk(selection && posts.get(selection.post));
 				break;
 			case "y":
 			case "Y": {
@@ -1265,7 +1266,7 @@
 				break;
 			}
 			case "c":
-				if (selection) document.getElementById(selection.post)?.querySelector(".compose input")?.focus();
+				if (selection) document.getElementById(selection.post)?.querySelector(".compose input, .question .q-note")?.focus();
 				break;
 			case "f":
 			case "Enter": {

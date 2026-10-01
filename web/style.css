@@ -924,14 +924,54 @@ body.side-hidden .sidebar {
 	padding-left: 32px;
 }
 
+.o-files {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: repeat(var(--files, 1), minmax(0, 1fr));
+}
+
+.o-files[data-count="2"] {
+	--files: 2;
+}
+
+.o-files[data-count="3"] {
+	--files: 3;
+}
+
+.o-file {
+	min-width: 0;
+}
+
+.o-file-name {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding-top: 4px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.o-file-name .name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: grab;
+}
+
+.o-file-name .act.icon {
+	padding: 1px 6px;
+}
+
 .option .stage {
 	border-radius: 7px;
 	overflow: hidden;
 	height: clamp(180px, 34vh, 420px);
 }
 
-.options:not(.media) .option .stage {
-	height: clamp(160px, 28vh, 320px);
+.o-files:not([data-count="1"]) .stage {
+	height: clamp(130px, 20vh, 260px);
 }
 
 .answer-row {
@@ -1046,6 +1086,10 @@ body.side-hidden .sidebar {
 	gap: 6px;
 }
 
+.comments[hidden] {
+	display: none;
+}
+
 .comment {
 	display: flex;
 	gap: 8px;
@@ -1079,6 +1123,11 @@ body.side-hidden .sidebar {
 	max-width: 40%;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.compose .send {
+	flex: none;
+	min-width: 72px;
 }
 
 .compose input {

@@ -126,8 +126,9 @@ export function preToolUse(input: unknown): HookDecision {
 
 export function guideText(): string {
 	return `agent-dailies is installed: the user reviews your work in one browser tab (the
-viewer) and answers your questions there. Use it for your work in progress instead
-of opening files in windows, leaving the user file paths, or publishing an Artifact.
+viewer), replies there (OK, or a note) and answers your questions. Use it for your
+work in progress instead of opening files in windows, leaving the user file paths,
+or publishing an Artifact.
 
 Show — whenever you want the user to look at an image, video, GIF, audio clip,
 3D model (GLB/glTF), PDF, HTML or text file:
@@ -138,8 +139,10 @@ Show — whenever you want the user to look at an image, video, GIF, audio clip,
 Ask — whenever you need the user to decide (pick an option, approve a design,
 choose what to keep), ask in the viewer rather than listing options in chat:
 - \`agent-dailies ask "<question>" a.png b.png --option "Neither — redo it" --why "<your recommendation and why>"\`
-  Files and --option texts become options A, B, C… (--multi lets them pick several);
-  they can add a note.
+  Files and --option texts become options A, B, C… (--multi lets them pick several).
+  When one option is a pattern shown by several files, group them:
+  \`ask "Which version?" --pattern "Current" a1.png a2.png --pattern "Proposed" b1.png b2.png\`.
+  The user picks per question and presses Send; a note is optional.
 - Several decisions at once (a design review): write a JSON sheet
   {"title": "…", "questions": [{"text": "…", "why": "…", "options": ["OK as proposed",
   {"label": "Alternative: …", "body": "…"}, "Let's discuss"]}]} — options may carry
@@ -161,7 +164,7 @@ Hear back:
 - After showing something you want a reaction to, keep \`agent-dailies watch\` running
   in the background (run_in_background, timeout 7200000): it exits when the user
   comments or answers, waking you. Start it again after acting. One per session.
-- \`agent-dailies feedback\` lists what they adopted, rejected, commented and answered.
+- \`agent-dailies feedback\` lists their replies and answers.
 - Posts are grouped by repository, issue and session; the issue comes from the branch
   name (or --issue). The viewer shows the issue's summary above its posts. If it has
   none and no issue command is configured, describe the issue once:

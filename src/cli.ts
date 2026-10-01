@@ -379,21 +379,31 @@ async function buildQuestions(target: Store, spec: AskSpec, base: string): Promi
 }
 
 async function ask(args: string[]): Promise<void> {
-	const { values, positionals } = parse(args, {
-		...WHERE_OPTIONS,
-		option: { type: "string", short: "o", multiple: true },
-		why: { type: "string" },
-		multi: { type: "boolean" },
-		file: { type: "string", short: "f" },
-		wait: { type: "boolean" },
-		timeout: { type: "string" },
+	// Order matters here (files after --pattern belong to it), so read the tokens.
+	const { values: parsed, positionals, tokens } = parseArgs({
+		args,
+		options: {
+			...WHERE_OPTIONS,
+			option: { type: "string", short: "o", multiple: true },
+			pattern: { type: "string", short: "p", multiple: true },
+			why: { type: "string" },
+			multi: { type: "boolean" },
+			file: { type: "string", short: "f" },
+			wait: { type: "boolean" },
+			timeout: { type: "string" },
+			help: { type: "boolean", short: "h" },
+		},
+		allowPositionals: true,
+		tokens: true,
 	});
+	const values = parsed as Values;
 	if (values.help || (!values.file && positionals.length === 0)) {
 		return out(
 			[
-				'Usage: agent-dailies ask "<question>" [file…] [--option TEXT]… [--why TEXT] [--multi] [--title T] [--wait] [--json]',
+				'Usage: agent-dailies ask "<question>" [file…] [--pattern LABEL file…]… [--option TEXT]… [--why TEXT] [--multi] [--wait] [--json]',
 				"       agent-dailies ask --file questions.json [--wait] [--json]",
-				"Each file after the question becomes an option (A, B, C…), then each --option. The user picks in the viewer.",
+				"Options, A, B, C… in order: each file on its own; --pattern LABEL with the files after it (one option with",
+				"several reference files); --option TEXT (a sentence). The user picks one per question and presses Send.",
 			].join("\n"),
 		);
 	}
@@ -405,17 +415,23 @@ async function ask(args: string[]): Promise<void> {
 		spec = JSON.parse(readFileSync(path, "utf8")) as AskSpec;
 		base = dirname(path);
 	} else {
-		const [text, ...files] = positionals;
-		spec = {
-			questions: [
-				{
-					text: text!,
-					why: values.why as string | undefined,
-					multi: Boolean(values.multi),
-					options: [...files.map((file) => ({ files: [file] })), ...((values.option as string[] | undefined) ?? [])],
-				},
-			],
-		};
+		let text: string | undefined;
+		const options: { label?: string; files?: string[] }[] = [];
+		let pattern: { label?: string; files: string[] } | undefined;
+		for (const token of tokens) {
+			if (token.kind === "positional") {
+				if (text === undefined) text = token.value;
+				else if (pattern) pattern.files.push(token.value);
+				else options.push({ files: [token.value] });
+			} else if (token.kind === "option" && token.name === "pattern") {
+				pattern = { label: token.value, files: [] };
+				options.push(pattern);
+			} else if (token.kind === "option" && token.name === "option") {
+				pattern = undefined;
+				options.push({ label: token.value });
+			}
+		}
+		spec = { questions: [{ text: text!, why: values.why as string | undefined, multi: Boolean(values.multi), options }] };
 	}
 	const { items, questions } = await buildQuestions(target, spec, base);
 	const input = postInput(values, items, {
@@ -863,6 +879,8 @@ async function hook(args: string[]): Promise<void> {
 			if (input.stop_hook_active || process.env.AGENT_DAILIES_AUTO_WATCH === "0") return;
 			const latest = postedBy(catalog, session, REMIND_WITHIN_MS).at(-1);
 			if (!latest || readSession(target, session).reminded === latest.id) return;
+			// The user already answered or commented on it: nothing to wait for.
+			if (catalog.history.some((event) => event.post === latest.id && event.by === "human")) return;
 			const viewer = client();
 			const health = await viewer.health();
 			if (!health || health.home !== target.home) return;

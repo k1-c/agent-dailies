@@ -6,9 +6,9 @@ description: Show the user your work in progress (images, videos, GIFs, audio, 3
 # agent-dailies
 
 The user keeps one browser tab open — the viewer. Everything you show or ask lands
-at the top of it, live, grouped by repository and worktree. They mark files adopted
-or rejected, answer your questions and write comments, and all of that comes back
-to you.
+at the top of it, live, grouped by repository, issue and session. They reply to what
+you show (OK, or a note) and answer your questions (pick an option, press Send; a
+note is optional), and all of that comes back to you.
 
 ## Which tool when
 
@@ -39,6 +39,16 @@ agent-dailies ask "Which front view do we keep?" a.png b.png --option "Neither �
 ```
 
 `--multi` lets them pick several. They can add a note to their answer.
+
+When an option is a pattern shown by several files, group the files under it (the
+user chooses the pattern, not single files):
+
+```sh
+agent-dailies ask "Which palette do we keep?" \
+  --pattern "Current" current_front.png current_back.png \
+  --pattern "Warmer" warm_front.png warm_back.png \
+  --option "Neither — try again"
+```
 
 Several decisions at once (a design review) — write a sheet and pass it with `--file`:
 
@@ -76,10 +86,10 @@ Ask again (a new post) for the next round.
 ## Hear back
 
 - `agent-dailies context` — what they selected (or the newest post): files with paths
-  you can read, marks, answers, comments. Run it first when they say "this one" / "これ".
+  you can read, answers, replies. Run it first when they say "this one" / "これ".
 - `agent-dailies watch` in the background — exits when they comment or answer on
   anything you showed this session. Start it again after acting.
-- `agent-dailies feedback [--since 2h] [--all]` — their marks, comments and answers.
+- `agent-dailies feedback [--since 2h] [--all]` — their replies and answers.
 - `agent-dailies list [--all]`, `agent-dailies get <item-id> [--to PATH]`.
 
 Add `--json` to `show`, `ask`, `context`, `feedback` and `list` for exact fields.
