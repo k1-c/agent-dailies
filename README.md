@@ -39,9 +39,10 @@ yesterday's renders and decides what to keep.
 - **The issue on screen** — above an issue's posts, its title, status, project and
   description, fetched by a command you choose (Linear, GitHub, …) or written by
   the agent.
-- **Questions** — `agent-dailies ask` turns files, patterns made of several files,
-  and sentences into options A, B, C… to pick from, or takes a whole review sheet
-  of decisions; your answers wake the agent.
+- **Questions about what you see** — `agent-dailies ask` turns files, patterns made
+  of several files, and sentences into options A, B, C… to pick from, or takes a
+  whole review sheet; your answers wake the agent. Questions answered from words
+  alone stay in the terminal.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
   next message.
@@ -131,9 +132,9 @@ And for you: `agent-dailies open` (open the viewer), `status`, `stop`.
 | Situation | Use |
 | --- | --- |
 | The agent's work in progress, to look at | `show` |
-| A decision on it: which option, approve a design, what to keep | `ask` |
+| A choice between things to look at: which render, how it looks, what to keep | `ask` |
 | A page other people read, or that outlives the work (a report, a shared doc) | your agent's documents / Artifacts |
-| A quick choice with nothing to look at | the terminal |
+| Any question answered from words alone (which approach, yes/no, a name) | the terminal |
 
 ### How comments and answers get back to the agent
 

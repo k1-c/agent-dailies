@@ -136,14 +136,14 @@ Show — whenever you want the user to look at an image, video, GIF, audio clip,
   It stores the files and puts them at the top of the viewer; the browser opens
   only when no viewer tab is. Put alternatives in one call so they sit side by side.
 
-Ask — whenever you need the user to decide (pick an option, approve a design,
-choose what to keep), ask in the viewer rather than listing options in chat:
+Ask — only when the user has to look at something to answer (pick between
+images, videos, models or pages you made; sign off on how something looks):
 - \`agent-dailies ask "<question>" a.png b.png --option "Neither — redo it" --why "<your recommendation and why>"\`
   Files and --option texts become options A, B, C… (--multi lets them pick several).
   When one option is a pattern shown by several files, group them:
   \`ask "Which version?" --pattern "Current" a1.png a2.png --pattern "Proposed" b1.png b2.png\`.
   The user picks per question and presses Send; a note is optional.
-- Several decisions at once (a design review): write a JSON sheet
+- Several such decisions at once (a review of things to look at): write a JSON sheet
   {"title": "…", "questions": [{"text": "…", "why": "…", "options": ["OK as proposed",
   {"label": "Alternative: …", "body": "…"}, "Let's discuss"]}]} — options may carry
   "files" — and run \`agent-dailies ask --file sheet.json\`.
@@ -168,10 +168,11 @@ Devlog — a record of how the work changed, for updates and devlog videos later
   the last cut), write from it, then \`agent-dailies devlog cut --name "<what went out>"\`.
 
 Which to use:
-- your work in progress to look at or decide on → agent-dailies (show / ask)
+- your work in progress to look at, or a choice between things to look at → agent-dailies (show / ask)
 - a page others will read, or that should outlive this work (a report, a shared
   document) → an Artifact
-- a quick choice that needs no picture or reasoning to look at → ask in the terminal
+- any question answered from words alone (which approach, yes/no, a name, what to
+  do next — even a design decision) → ask in the terminal, not in the viewer
 
 Hear back:
 - When the user says "this", "the left one", "これ", "左の", "今見てるやつ" about

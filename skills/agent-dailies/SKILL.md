@@ -1,6 +1,6 @@
 ---
 name: agent-dailies
-description: Show the user your work in progress (images, videos, GIFs, audio, 3D models, PDFs, HTML, text) in the agent-dailies viewer — one live browser tab — and ask them to decide there (pick an option, sign off a design review), instead of opening windows, printing paths, listing options in chat or publishing an Artifact. Use whenever you want the user to look at something you made ("show me", "let me see", "open it", "見せて", "開いて", "比べたい"), need a decision ("which one", "choose", "review this", "どっちがいい", "選んで", "決めて", "レビューして", "判断して"), look back on finished work or summarize a period ("devlog", "制作記録", "ふりかえり", "前回からの変更", "アップデートのまとめ"), or they refer to something on that page ("this one", "the left one", "これ", "左の", "今見てるやつ", "採用したやつ").
+description: Show the user your work in progress (images, videos, GIFs, audio, 3D models, PDFs, HTML, text) in the agent-dailies viewer — one live browser tab — and ask them to choose there between things to look at (pick a render, sign off on how something looks), instead of opening windows, printing paths or publishing an Artifact. Questions answered from words alone stay in the terminal. Use whenever you want the user to look at something you made ("show me", "let me see", "open it", "見せて", "開いて", "比べたい"), need them to choose between things you made ("which one looks better", "どっちの絵がいい", "見比べて選んで", "見た目をレビューして"), look back on finished work or summarize a period ("devlog", "制作記録", "ふりかえり", "前回からの変更", "アップデートのまとめ"), or they refer to something on that page ("this one", "the left one", "これ", "左の", "今見てるやつ", "採用したやつ").
 ---
 
 # agent-dailies
@@ -15,9 +15,12 @@ note is optional), and all of that comes back to you.
 | Situation | Use |
 | --- | --- |
 | Your work in progress to look at | `agent-dailies show` |
-| A decision on it: which option, approve a design, what to keep | `agent-dailies ask` |
+| A choice between things to look at: which render, how it looks, what to keep | `agent-dailies ask` |
 | A page other people read, or that outlives this work (report, shared doc) | an Artifact |
-| A quick choice with nothing to look at | ask in the terminal |
+| Any question answered from words alone — which approach, yes/no, a name, what next, even a design decision | ask in the terminal |
+
+Do not route plain questions through the viewer: the user answers those faster in
+the terminal, and a post with no picture in it is just noise on the page.
 
 ## Show
 
@@ -50,7 +53,7 @@ agent-dailies ask "Which palette do we keep?" \
   --option "Neither — try again"
 ```
 
-Several decisions at once (a design review) — write a sheet and pass it with `--file`:
+Several such decisions at once (a review of things to look at) — write a sheet and pass it with `--file`:
 
 ```json
 {
