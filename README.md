@@ -29,6 +29,11 @@ yesterday's renders and decides what to keep.
   branches) → agent sessions, newest activity first, with unread dots, counts and
   questions waiting; pick one to see just its posts, or search titles, files and
   issues. Posts carry the issue key from the branch name (`summ-239` → `SUMM-239`).
+- **Devlog** — when work is committed, the agent looks back and records what
+  changed (with before/after only when a picture helps); later,
+  `agent-dailies devlog summary` gathers everything since the last update —
+  entries, decisions, commits, Claude Code transcripts (kept in the store before
+  Claude Code deletes them) — to write the next one from.
 - **The issue on screen** — above an issue's posts, its title, status, project and
   description, fetched by a command you choose (Linear, GitHub, …) or written by
   the agent.
@@ -155,6 +160,21 @@ it has been handed over once:
 Paths point to `named/<item>/<original name>` in the store, a hard link to the
 stored copy, so the name is right and no space is used.
 
+### Devlog
+
+```sh
+agent-dailies devlog add --title "What changed" --summary - --before old.png --after new.png <<'EOF'
+Why it changed and what was decided.
+EOF
+agent-dailies devlog summary                      # material since the last cut
+agent-dailies devlog cut --name "Update 2026-10-02"
+```
+
+Before/after take files or the ids (`i_…`) of files already shown. Commits the
+session made are attached. The Stop hook suggests an entry once after new
+commits; the agent decides whether one is worth it. Transcripts are copied at
+session start and end (`agent-dailies devlog sweep` by hand).
+
 ### Issue summaries
 
 agent-dailies talks to no tracker itself. Name a command that prints an issue as
@@ -187,7 +207,8 @@ $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
                                      (and verdict: per-file marks from versions before 0.5)
   named/<item>/<original name>       hard links under the original names (copy path)
   derived/<sha256>.webm              videos converted for the browser
-  sessions/<session>.json            what each agent session has been handed
+  transcripts/<project>/<session>.jsonl   Claude Code transcripts, kept
+  sessions/<session>.json            what each agent session has been handed, and where it began
   selection.json                     what is selected in the viewer
   server.log
 ```
@@ -203,6 +224,7 @@ is a plain union — the groundwork for the planned sync (below).
 | `AGENT_DAILIES_NO_OPEN=1` | never open a browser from `show` |
 | `AGENT_DAILIES_BROWSER` | command to open URLs with |
 | `AGENT_DAILIES_AUTO_WATCH=0` | no Stop-hook reminder to start `watch` |
+| `AGENT_DAILIES_DEVLOG=0` | no Stop-hook suggestion of a devlog entry |
 | `AGENT_DAILIES_ISSUE_COMMAND` | the issue command, overriding the config file |
 | `AGENT_DAILIES_CONFIG` | another config file |
 

@@ -2,12 +2,15 @@
 // agent-dailies: a live review page for what a coding agent makes.
 
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import * as config from "./config.ts";
 import { baseUrl, Client, ensureServer, openBrowser } from "./client.ts";
+import { collect, commitsBetween, headOf, keepTranscript, repositoryRoot, summaryMarkdown, transcriptDir } from "./devlog.ts";
 import { describeAnswer, describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
 import { guideText, preToolUse } from "./hook.ts";
 import { dueForRefresh, fetchIssue, ISSUE_KEY, issueCommandFor, markFetched, sameIssue, type IssueInfo } from "./issues.ts";
@@ -18,6 +21,8 @@ import {
 	Store,
 	type AnswerEvent,
 	type Catalog,
+	type CommitRef,
+	type CutEvent,
 	type IssueEvent,
 	type CommentEvent,
 	type Item,
@@ -52,6 +57,9 @@ Usage:
   agent-dailies issue [KEY] [--refresh] [--title T] [--description TEXT|-] [--status S] [--url U]
                                       Show or set what an issue is about (the viewer's issue card).
                                       --refresh runs your issueCommand (config file) for it.
+  agent-dailies devlog <add|list|summary|cut|sweep> …
+                                      The devlog: record what changed (with before/after), and gather a
+                                      period's entries, decisions, commits and transcripts for a summary
   agent-dailies get <item-id|post-id:n> [--to PATH]
                                       Print a stored file's path, or copy it to PATH
   agent-dailies open                  Open the viewer in the browser
@@ -63,7 +71,8 @@ Usage:
   agent-dailies hook pre-tool-use     Claude Code / Codex hook: stop opening media in windows
   agent-dailies hook session-start    Claude Code / Codex hook: print the guide and unread feedback
   agent-dailies hook user-prompt-submit  Claude Code hook: pass on feedback with the user's next message
-  agent-dailies hook stop             Claude Code hook: hand over comments before the agent stops
+  agent-dailies hook stop             Claude Code hook: hand over comments; suggest a devlog entry after commits
+  agent-dailies hook session-end      Claude Code hook: keep the session's transcript
 
 Environment:
   AGENT_DAILIES_HOME   store location (default: $XDG_DATA_HOME/agent-dailies)
@@ -739,6 +748,174 @@ async function watch(args: string[]): Promise<void> {
 	await finish(`No comments in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Start \`agent-dailies watch\` in the background again if you still want to hear them.`);
 }
 
+
+// ---- devlog ----
+
+const DEVLOG_HELP = `Usage:
+  agent-dailies devlog add --title T [--summary TEXT|-] [--before FILE|ITEM…] [--after FILE|ITEM…] [FILE…]
+                           [--issue KEY] [--commits auto|none|A..B] [--open] [--json]
+      Record what changed (look back over the session first). Before/after take files or the ids of
+      files already shown (i_…). Commits default to the ones this session made.
+  agent-dailies devlog list [--since 7d|DATE] [--all] [--json]
+  agent-dailies devlog summary [--since cut|7d|DATE] [--until DATE] [--all] [--json]
+      Everything recorded since the last cut (or the given time): entries, decisions, commits,
+      transcripts — the material to write an update or a devlog post from.
+  agent-dailies devlog cut [--name N] [--all]      Mark that a summary went out; the next starts here.
+  agent-dailies devlog sweep [--quiet]             Copy this project's Claude Code transcripts into the store.`;
+
+// A file to attach, or the id of a file already in the store (reused, not copied again).
+async function itemFrom(target: Store, catalog: Catalog, ref: string): Promise<Item> {
+	if (/^i_[a-z0-9]+$/.test(ref)) {
+		const known = catalog.postOfItem(ref)?.items.find((item) => item.id === ref);
+		if (known) return { ...known, id: newId("i") };
+	}
+	if (!existsSync(ref)) throw new Error(`no such file or item: ${ref}`);
+	return target.addFile(resolve(ref));
+}
+
+function sessionCommits(target: Store, where: ReturnType<typeof detectWhere>, mode: string): CommitRef[] {
+	if (mode === "none") return [];
+	const cwd = where.cwd ?? process.cwd();
+	if (mode.includes("..")) {
+		const [from, to] = mode.split("..");
+		return commitsBetween(cwd, from!, to || "HEAD");
+	}
+	const start = where.session ? readSession(target, where.session).start : undefined;
+	return start?.head ? commitsBetween(cwd, start.head) : [];
+}
+
+async function devlogAdd(args: string[]): Promise<void> {
+	const { values: parsed, tokens } = parseArgs({
+		args,
+		options: {
+			...WHERE_OPTIONS,
+			summary: { type: "string", short: "s" },
+			before: { type: "boolean" },
+			after: { type: "boolean" },
+			commits: { type: "string" },
+			open: { type: "boolean" },
+		},
+		allowPositionals: true,
+		tokens: true,
+	});
+	const values = parsed as Values;
+	const target = store();
+	const catalog = target.load();
+	const refs: Record<"plain" | "before" | "after", string[]> = { plain: [], before: [], after: [] };
+	let bucket: keyof typeof refs = "plain";
+	for (const token of tokens) {
+		if (token.kind === "option" && (token.name === "before" || token.name === "after")) bucket = token.name;
+		else if (token.kind === "positional") refs[bucket].push(token.value);
+	}
+	const summary = values.summary === "-" ? readFileSync(0, "utf8") : (values.summary as string | undefined);
+	if (!values.title && !summary) throw new Error(`a devlog entry needs --title or --summary\n\n${DEVLOG_HELP}`);
+	const items: Item[] = [];
+	const ids: Record<"before" | "after", string[]> = { before: [], after: [] };
+	for (const kind of ["before", "after", "plain"] as const) {
+		for (const ref of refs[kind]) {
+			const item = await itemFrom(target, catalog, ref);
+			items.push(item);
+			if (kind !== "plain") ids[kind].push(item.id);
+		}
+	}
+	const where = detectWhere();
+	const commits = sessionCommits(target, where, (values.commits as string | undefined) ?? "auto");
+	const input = postInput({ ...values, "no-open": !values.open }, items, {
+		kind: "devlog",
+		devlog: { summary, before: ids.before, after: ids.after, commits },
+	});
+	const published = await publish(target, input, { ...values, "no-open": !values.open });
+	if (values.json) return out(JSON.stringify({ post: published.post, url: published.url }, null, 2));
+	const lines = [`Recorded a devlog entry: ${published.url}`];
+	if (ids.before.length || ids.after.length) lines.push(`  before ${ids.before.length} · after ${ids.after.length}`);
+	if (commits.length) lines.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}: ${commits.map((commit) => commit.sha.slice(0, 8)).join(" ")}`);
+	out(lines.join("\n"));
+}
+
+function summaryStart(catalog: Catalog, value: string | undefined, project: string | undefined): string {
+	if (!value || value === "cut") return catalog.lastCut(project)?.at ?? since(undefined, 7 * 86_400_000);
+	return since(value, 0);
+}
+
+async function devlog(args: string[]): Promise<void> {
+	const [sub, ...rest] = args;
+	const target = store();
+	switch (sub) {
+		case "add":
+			return devlogAdd(rest);
+		case "list": {
+			const { values } = parse(rest, { since: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
+			const where = detectWhere();
+			const entries = target.load().list({
+				devlog: true,
+				since: since(values.since as string | undefined, 30 * 86_400_000),
+				...(values.all ? {} : { project: where.project }),
+			});
+			if (values.json) return out(JSON.stringify(entries, null, 2));
+			if (!entries.length) return out("No devlog entries in that period.");
+			return out(
+				entries
+					.map((entry) => `- ${entry.at.slice(0, 16)} ${entry.issue ? `${entry.issue} ` : ""}${entry.title ?? "(untitled)"} (${entry.id})`)
+					.join("\n"),
+			);
+		}
+		case "summary": {
+			const { values } = parse(rest, { since: { type: "string" }, until: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
+			const catalog = target.load();
+			const project = values.all ? undefined : detectWhere().project;
+			const summary = collect(catalog, target, {
+				since: summaryStart(catalog, values.since as string | undefined, project),
+				until: values.until ? since(values.until as string, 0) : undefined,
+				project,
+			});
+			return out(values.json ? JSON.stringify(summary, null, 2) : summaryMarkdown(catalog, target, summary));
+		}
+		case "cut": {
+			const { values } = parse(rest, { name: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
+			const body = { name: values.name, project: values.all ? undefined : detectWhere().project, by: "agent" };
+			let event: CutEvent;
+			try {
+				const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
+				event = await viewer.post<CutEvent>("api/cuts", body);
+			} catch {
+				event = { type: "cut", id: newId("x"), at: new Date().toISOString(), machine: target.machine, name: body.name as string | undefined, project: body.project, by: "agent" };
+				target.append(event);
+			}
+			return out(values.json ? JSON.stringify(event, null, 2) : `Cut the devlog at ${event.at}${event.name ? ` (${event.name})` : ""}; the next summary starts here.`);
+		}
+		case "sweep": {
+			const { values } = parse(rest, { quiet: { type: "boolean" } });
+			const copied = sweepTranscripts(target, process.cwd());
+			if (!values.quiet) out(copied.length ? `Kept ${copied.length} transcript${copied.length === 1 ? "" : "s"} in ${transcriptDir(target, detectWhere().project)}` : "No transcripts to keep.");
+			return;
+		}
+		default:
+			return out(DEVLOG_HELP);
+	}
+}
+
+// Claude Code keeps a project's transcripts in ~/.claude/projects/<the path with
+// every other character as "-">/, worktrees in folders that start the same way.
+function claudeProjectsDir(): string {
+	return join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+}
+
+function sweepTranscripts(target: Store, cwd: string): string[] {
+	const root = repositoryRoot(cwd) ?? cwd;
+	const prefix = root.replace(/[^A-Za-z0-9]/g, "-");
+	const dir = claudeProjectsDir();
+	if (!existsSync(dir)) return [];
+	const project = detectWhere(cwd).project;
+	const copied: string[] = [];
+	for (const folder of readdirSync(dir).filter((name) => name === prefix || name.startsWith(`${prefix}-`))) {
+		for (const file of readdirSync(join(dir, folder)).filter((name) => name.endsWith(".jsonl"))) {
+			const kept = keepTranscript(target, project, file.replace(/\.jsonl$/, ""), join(dir, folder, file));
+			if (kept) copied.push(kept);
+		}
+	}
+	return copied;
+}
+
 async function status(args: string[]): Promise<void> {
 	const { values } = parse(args, { json: { type: "boolean" } });
 	const health = await client().health();
@@ -807,6 +984,35 @@ interface HookInput {
 
 const REMIND_WITHIN_MS = 12 * 3_600_000;
 
+// Once per new commit: if this session has committed since it began and has not
+// recorded a devlog entry since, suggest looking back. The agent decides whether
+// the change is worth an entry; the hook only makes sure it is considered.
+function devlogReminder(target: Store, catalog: Catalog, session: string, cwd: string): boolean {
+	if (process.env.AGENT_DAILIES_DEVLOG === "0") return false;
+	const state = readSession(target, session);
+	const head = headOf(cwd);
+	if (!state.start?.head || !head || head === state.start.head || state.devlogReminded === head) return false;
+	const commits = commitsBetween(cwd, state.start.head, head);
+	if (!commits.length) return false;
+	writeSession(target, session, { devlogReminded: head });
+	const latestCommit = commits[0]!.at ?? "";
+	const recorded = catalog.posts.some((post) => post.kind === "devlog" && post.session === session && post.at >= latestCommit);
+	if (recorded) return false;
+	process.stderr.write(
+		[
+			`This session has made ${commits.length} commit${commits.length === 1 ? "" : "s"} since it began (latest: ${commits[0]!.subject}).`,
+			"Look back over the session: if the change is something a person using the product would notice, record it —",
+			`  agent-dailies devlog add --title "<what changed>" --summary - [--before <file|i_…>…] [--after <file|i_…>…] <<'EOF'`,
+			"  <what changed, why, and what was decided along the way>",
+			"  EOF",
+			"Add before/after only when a picture shows the change better than words (reuse files you showed with their i_… ids,",
+			"or capture the before from the previous commit). Skip refactors and fixes nobody sees. If nothing is worth recording, just finish.",
+		].join("\n") + "\n",
+	);
+	process.exitCode = 2;
+	return true;
+}
+
 // Exit code 2 from a hook blocks the step (a tool call, or stopping) and hands
 // stderr to the agent; plain stdout from SessionStart and UserPromptSubmit is
 // added to the agent's context.
@@ -829,6 +1035,16 @@ async function hook(args: string[]): Promise<void> {
 			return;
 		}
 		case "session-start": {
+			if (input.session_id && !readSession(target, input.session_id).start) {
+				const cwd = input.cwd || process.cwd();
+				writeSession(target, input.session_id, { start: { at: new Date().toISOString(), head: headOf(cwd), cwd } });
+			}
+			// Keep earlier sessions' transcripts too (one that crashed never ran SessionEnd).
+			spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "devlog", "sweep", "--quiet"], {
+				cwd: input.cwd && existsSync(input.cwd) ? input.cwd : undefined,
+				detached: true,
+				stdio: "ignore",
+			}).unref();
 			const lines = [guideText()];
 			const where = detectWhere(input.cwd || process.cwd());
 			const catalog = target.load();
@@ -868,7 +1084,10 @@ async function hook(args: string[]): Promise<void> {
 			if (!session) return;
 			const catalog = target.load();
 			const shown = postedBy(catalog, session);
-			if (!shown.length) return;
+			if (!shown.length) {
+				if (!input.stop_hook_active) devlogReminder(target, catalog, session, input.cwd || process.cwd());
+				return;
+			}
 			const pending = pendingFor(catalog, target, session);
 			if (hasMessage(pending)) {
 				markDelivered(target, session, pending);
@@ -876,7 +1095,9 @@ async function hook(args: string[]): Promise<void> {
 				process.exitCode = 2;
 				return;
 			}
-			if (input.stop_hook_active || process.env.AGENT_DAILIES_AUTO_WATCH === "0") return;
+			if (input.stop_hook_active) return;
+			if (devlogReminder(target, catalog, session, input.cwd || process.cwd())) return;
+			if (process.env.AGENT_DAILIES_AUTO_WATCH === "0") return;
 			const latest = postedBy(catalog, session, REMIND_WITHIN_MS).at(-1);
 			if (!latest || readSession(target, session).reminded === latest.id) return;
 			// The user already answered or commented on it: nothing to wait for.
@@ -900,8 +1121,13 @@ async function hook(args: string[]): Promise<void> {
 			process.exitCode = 2;
 			return;
 		}
+		case "session-end": {
+			const transcript = typeof input.transcript_path === "string" ? input.transcript_path : "";
+			if (input.session_id && transcript) keepTranscript(target, detectWhere(input.cwd || process.cwd()).project, input.session_id, transcript);
+			return;
+		}
 		default:
-			throw new Error("Usage: agent-dailies hook <pre-tool-use|session-start|user-prompt-submit|stop>");
+			throw new Error("Usage: agent-dailies hook <pre-tool-use|session-start|user-prompt-submit|stop|session-end>");
 	}
 }
 
@@ -918,6 +1144,8 @@ async function main(argv: string[]): Promise<void> {
 			return context(rest);
 		case "issue":
 			return issue(rest);
+		case "devlog":
+			return devlog(rest);
 		case "feedback":
 			return feedback(rest);
 		case "list":

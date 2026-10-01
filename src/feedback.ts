@@ -24,6 +24,10 @@ interface SessionState {
 	delivered?: string;
 	/** The newest post the Stop hook has already asked the agent to watch for. */
 	reminded?: string;
+	/** Where the session began: its commits are the ones after `head`. */
+	start?: { at: string; head?: string; cwd?: string };
+	/** The commit the Stop hook last suggested a devlog entry for. */
+	devlogReminded?: string;
 }
 
 export function readSession(store: Store, session: string): SessionState {

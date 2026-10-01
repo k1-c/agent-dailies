@@ -151,6 +151,18 @@ choose what to keep), ask in the viewer rather than listing options in chat:
   run_in_background, timeout 7200000). It exits with the answers once every question
   is answered (or the user comments), which wakes you. Act on them.
 
+Devlog — a record of how the work changed, for summaries later:
+- When a piece of work is committed, look back over the session. If it changed
+  something a person using the product would notice, record it:
+  \`agent-dailies devlog add --title "<what changed>" --summary - [--before <file|i_…>…] [--after <file|i_…>…]\`
+  with the summary (what changed, why, what was decided) on stdin. Add before/after
+  only when a picture shows the change; reuse files you showed (their i_… ids) or
+  capture the "before" from the previous commit. Skip refactors nobody sees. The
+  Stop hook reminds you once after new commits; deciding is yours.
+- To write an update ("what happened since the last one"), read
+  \`agent-dailies devlog summary\` (entries, decisions, commits, transcripts since
+  the last cut), write from it, then \`agent-dailies devlog cut --name "<what went out>"\`.
+
 Which to use:
 - your work in progress to look at or decide on → agent-dailies (show / ask)
 - a page others will read, or that should outlive this work (a report, a shared

@@ -75,6 +75,27 @@ export interface Question {
 	multi?: boolean;
 }
 
+/** A commit a devlog entry covers. */
+export interface CommitRef {
+	sha: string;
+	subject: string;
+	at?: string;
+}
+
+/**
+ * What a devlog entry adds to a post: the agent looking back at its session —
+ * what changed for the user and why — with before/after files when a picture
+ * shows the change better than words.
+ */
+export interface DevlogInfo {
+	/** Markdown. */
+	summary?: string;
+	/** Item ids of the post showing how it was, and how it is now. */
+	before: string[];
+	after: string[];
+	commits: CommitRef[];
+}
+
 export interface PostEvent extends Where {
 	type: "post";
 	id: string;
@@ -86,6 +107,9 @@ export interface PostEvent extends Where {
 	items: Item[];
 	/** Present when the post asks the user to decide something. */
 	questions?: Question[];
+	/** "devlog" for a devlog entry; absent for things shown for review. */
+	kind?: "devlog";
+	devlog?: DevlogInfo;
 }
 
 export interface VerdictEvent {
@@ -142,7 +166,18 @@ export interface IssueEvent {
 	by: Author;
 }
 
-export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent;
+/** A cut in the devlog: "summaries start from here" (an update went out). */
+export interface CutEvent {
+	type: "cut";
+	id: string;
+	at: string;
+	machine: string;
+	name?: string;
+	project?: string;
+	by: Author;
+}
+
+export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent | CutEvent;
 
 export interface ListFilter {
 	limit?: number;
@@ -156,6 +191,11 @@ export interface ListFilter {
 	q?: string;
 	/** Only posts with questions still unanswered. */
 	open?: boolean;
+	/** Only devlog entries. */
+	devlog?: boolean;
+	/** Only posts at or after / before these times. */
+	since?: string;
+	until?: string;
 }
 
 export interface SessionNode {
@@ -329,11 +369,15 @@ export interface PostInput extends Where {
 	tags?: string[];
 	items: Item[];
 	questions?: Question[];
+	kind?: "devlog";
+	devlog?: DevlogInfo;
 }
 
 export function buildPost(input: PostInput, machine: string, at: Date = new Date()): PostEvent {
 	const questions = Array.isArray(input.questions) && input.questions.length ? input.questions : undefined;
-	if (!Array.isArray(input.items) || (input.items.length === 0 && !questions)) throw new Error("a post needs at least one item or question");
+	const devlog = input.kind === "devlog";
+	if (!Array.isArray(input.items) || (input.items.length === 0 && !questions && !devlog)) throw new Error("a post needs at least one item or question");
+	if (devlog && !input.title && !input.devlog?.summary) throw new Error("a devlog entry needs a title or a summary");
 	if (questions) checkQuestions(questions, input.items);
 	return {
 		type: "post",
@@ -351,6 +395,15 @@ export function buildPost(input: PostInput, machine: string, at: Date = new Date
 		tags: Array.isArray(input.tags) ? input.tags.map(String) : [],
 		items: input.items,
 		questions,
+		kind: devlog ? "devlog" : undefined,
+		devlog: devlog
+			? {
+					summary: input.devlog?.summary || undefined,
+					before: input.devlog?.before ?? [],
+					after: input.devlog?.after ?? [],
+					commits: input.devlog?.commits ?? [],
+				}
+			: undefined,
 	};
 }
 
@@ -397,6 +450,7 @@ export class Catalog {
 	private readonly comments = new Map<string, CommentEvent[]>();
 	private readonly answers = new Map<string, Map<string, AnswerEvent>>();
 	private readonly issues = new Map<string, IssueEvent>();
+	readonly cuts: CutEvent[] = [];
 	readonly history: (VerdictEvent | CommentEvent | AnswerEvent)[] = [];
 
 	apply(event: DailiesEvent): void {
@@ -420,6 +474,9 @@ export class Catalog {
 				this.history.push(event);
 				break;
 			}
+			case "cut":
+				this.cuts.push(event);
+				break;
 			case "issue": {
 				const key = event.key.toUpperCase();
 				const previous = this.issues.get(key);
@@ -478,11 +535,15 @@ export class Catalog {
 		if (filter.issue && post.issue?.toLowerCase() !== filter.issue.toLowerCase()) return false;
 		if (filter.session && post.session !== filter.session) return false;
 		if (filter.open && !this.openQuestions(post).length) return false;
+		if (filter.devlog && post.kind !== "devlog") return false;
+		if (filter.since && post.at < filter.since) return false;
+		if (filter.until && post.at > filter.until) return false;
 		if (filter.q) {
 			const words = filter.q.toLowerCase().split(/\s+/).filter(Boolean);
 			const text = [
 				post.title,
 				post.note,
+				post.devlog?.summary,
 				post.issue,
 				post.lane,
 				post.branch,
@@ -514,6 +575,15 @@ export class Catalog {
 			if (filter.limit && out.length >= filter.limit) break;
 		}
 		return out;
+	}
+
+	/** The latest cut, for one project or any. */
+	lastCut(project?: string): CutEvent | undefined {
+		for (let index = this.cuts.length - 1; index >= 0; index--) {
+			const cut = this.cuts[index]!;
+			if (!project || !cut.project || cut.project === project) return cut;
+		}
+		return undefined;
 	}
 
 	/** Repositories → issues (or branches) → agent sessions, most recently active first. */

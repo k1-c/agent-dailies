@@ -23,6 +23,7 @@
 	const posts = new Map(); // id -> post view
 	const order = []; // ids, newest first
 	let tree = [];
+	let counts = {};
 	let scope = readScope();
 	let query = "";
 	let currentIssue = null;
@@ -113,6 +114,7 @@
 	function inScope(post, target = scope) {
 		if (target.kind === "all") return true;
 		if (target.kind === "open") return openQuestions(post).length > 0;
+		if (target.kind === "devlog") return post.kind === "devlog";
 		if (groupIdOf(post) !== scopeGroupId(target)) return false;
 		return target.kind === "group" || post.session === target.session;
 	}
@@ -404,12 +406,44 @@
 		return { item: undefined, label: post.items.length > 1 ? t.commentOnPost : "" };
 	}
 
+	// ---- devlog entries ----
+
+	function buildDevlog(post) {
+		const parts = [];
+		const info = post.devlog || {};
+		if (info.summary) parts.push(el("div", { class: "devlog-summary" }, [markdown(info.summary)]));
+		const side = (label, ids) => {
+			const items = ids.map((id) => post.items.find((item) => item.id === id)).filter(Boolean);
+			const grid = el("div", { class: "grid", "data-columns": String(Math.min(items.length, 2) || 1) });
+			grid.style.setProperty("--columns", String(Math.min(items.length, 2) || 1));
+			items.forEach((item) => grid.append(buildTile(post, item, post.items.indexOf(item))));
+			return el("div", { class: "ba-side" }, [el("div", { class: "ba-label", text: label }), grid]);
+		};
+		if (info.before?.length || info.after?.length) {
+			parts.push(
+				el("div", { class: `before-after${info.before?.length && info.after?.length ? " pair" : ""}` }, [
+					info.before?.length ? side(t.before, info.before) : null,
+					info.after?.length ? side(t.after, info.after) : null,
+				]),
+			);
+		}
+		if (info.commits?.length) {
+			const list = el(
+				"ul",
+				{ class: "commits" },
+				info.commits.map((commit) => el("li", {}, [el("code", { text: commit.sha.slice(0, 8) }), document.createTextNode(` ${commit.subject}`)])),
+			);
+			parts.push(el("details", { class: "commit-list" }, [el("summary", { text: t.commits(info.commits.length) }), list]));
+		}
+		return parts;
+	}
+
 	// ---- questions ----
 
 	const drafts = new Map(); // `${post}/${question}` -> Set of option ids picked but not sent
 
 	function questionItemIds(post) {
-		const ids = new Set();
+		const ids = new Set([...(post.devlog?.before || []), ...(post.devlog?.after || [])]);
 		for (const question of post.questions || []) {
 			for (const id of question.items || []) ids.add(id);
 			for (const option of question.options) for (const id of option.items || []) ids.add(id);
@@ -581,7 +615,7 @@
 		if (answer) {
 			parts.push(
 				el("div", { class: "answered-line" }, [
-					el("span", { class: "who", text: `${t.yourAnswer}: ` }),
+					el("span", { class: "who", text: `${answer.by === "agent" ? t.agentAnswer : t.yourAnswer}: ` }),
 					document.createTextNode(answerSummary(question, answer)),
 					el("span", { class: "time", text: `  ${ago(answer.at)}` }),
 				]),
@@ -698,9 +732,11 @@
 			el("time", { class: "time", datetime: post.at, title: new Date(post.at).toLocaleString(), text: ago(post.at) }),
 		]);
 		if (post.questions?.length) meta.prepend(el("span", { class: "chip state" }));
+		if (post.kind === "devlog") meta.prepend(el("span", { class: "chip devlog", text: t.devlog }));
 		node.append(el("header", { class: "post-head" }, [el("h2", { class: "post-title", text: title }), meta]));
 		if (post.note) node.append(el("p", { class: "note", text: post.note }));
 		for (const question of post.questions || []) node.append(buildQuestion(post, question));
+		if (post.kind === "devlog") node.append(...buildDevlog(post));
 		const inQuestions = questionItemIds(post);
 		const loose = post.items.filter((item) => !inQuestions.has(item.id));
 		if (loose.length) {
@@ -852,7 +888,9 @@
 		clearTimeout(treeTimer);
 		treeTimer = setTimeout(async () => {
 			try {
-				tree = (await api("/api/tree")).tree;
+				const response = await api("/api/tree");
+				tree = response.tree;
+				counts = response.counts || {};
 				renderTree();
 				renderScope();
 			} catch (error) {
@@ -913,7 +951,7 @@
 					count ? el("span", { class: `side-count${kind === "open" ? " open" : ""}`, text: String(count) }) : null,
 				],
 			);
-		rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0));
+		rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0), smart("devlog", "✎", t.devlog, counts.devlog || 0));
 		for (const project of tree) {
 			const groups = project.groups.filter(
 				(group) =>
@@ -1000,6 +1038,7 @@
 		const group = findGroup(scopeGroupId());
 		let label = t.all;
 		if (scope.kind === "open") label = t.waiting;
+		else if (scope.kind === "devlog") label = t.devlog;
 		else if (group) {
 			label = `${group.issue ? `${group.issue} ` : ""}${group.issue && group.title === group.issue ? "" : group.title}`;
 			if (scope.kind === "session") {
@@ -1081,6 +1120,7 @@
 	function scopeParams(target = scope) {
 		const params = new URLSearchParams({ limit: String(PAGE) });
 		if (target.kind === "open") params.set("open", "1");
+		if (target.kind === "devlog") params.set("devlog", "1");
 		if (target.kind === "group" || target.kind === "session") {
 			params.set("project", target.project);
 			if (target.issue) params.set("issue", target.issue);
@@ -1330,6 +1370,7 @@
 			feed.replaceChildren();
 		}
 		tree = state.tree;
+		counts = state.counts || {};
 		currentIssue = state.issue;
 		if ((scope.kind === "group" || scope.kind === "session") && !findGroup(scopeGroupId())) {
 			scope = { kind: "all" };

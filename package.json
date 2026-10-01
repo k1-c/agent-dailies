@@ -1,6 +1,6 @@
 {
   "name": "agent-dailies",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A live review page for what your coding agent makes: it shows images, videos, audio and 3D models in one browser tab instead of opening windows, asks you to decide there, and brings your replies back to the agent.",
   "keywords": [
     "claude-code",

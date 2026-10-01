@@ -722,6 +722,73 @@ body.side-hidden .sidebar {
 	padding: 3px 7px;
 }
 
+/* Devlog entries */
+
+.chip.devlog {
+	color: #1b1408;
+	background: color-mix(in srgb, var(--accent) 75%, var(--adopted));
+	border-color: transparent;
+	font-weight: 650;
+}
+
+.devlog-summary {
+	padding: 0 16px 10px;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.before-after {
+	display: grid;
+	gap: 0;
+	padding: 0 0 4px;
+}
+
+.before-after.pair {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ba-side {
+	min-width: 0;
+}
+
+.ba-side + .ba-side {
+	border-left: 1px dashed var(--line-strong);
+}
+
+.ba-label {
+	padding: 4px 16px 0;
+	color: var(--faint);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.before-after .grid {
+	padding-top: 4px;
+}
+
+.commit-list {
+	margin: 0 16px 12px;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.commit-list summary {
+	cursor: pointer;
+	color: var(--faint);
+}
+
+.commits {
+	margin: 6px 0 0;
+	padding-left: 1.2em;
+}
+
+.commits code {
+	font: 12px var(--mono);
+	color: var(--accent);
+}
+
 /* Questions */
 
 .post.asking {
@@ -1325,8 +1392,14 @@ body.side-hidden .sidebar {
 
 @media (max-width: 760px) {
 	.grid,
-	.options {
+	.options,
+	.before-after.pair {
 		grid-template-columns: minmax(0, 1fr) !important;
+	}
+
+	.ba-side + .ba-side {
+		border-left: 0;
+		border-top: 1px dashed var(--line-strong);
 	}
 
 	.stage {
