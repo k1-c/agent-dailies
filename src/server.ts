@@ -7,7 +7,6 @@
 
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { version } from "./config.ts";
@@ -55,12 +54,11 @@ const STATIC_TYPES: Record<string, string> = {
 	".svg": "image/svg+xml",
 };
 
+// Vendored so the viewer works offline and the plugin needs no install step.
+const MODEL_VIEWER = join(WEB_DIR, "vendor", "model-viewer.min.js");
+
 function modelViewerPath(): string | undefined {
-	try {
-		return createRequire(import.meta.url).resolve("@google/model-viewer/dist/model-viewer.min.js");
-	} catch {
-		return undefined;
-	}
+	return existsSync(MODEL_VIEWER) ? MODEL_VIEWER : undefined;
 }
 
 class HttpError extends Error {

@@ -34,27 +34,36 @@ yesterday's renders and decides what to keep.
 
 ## Install
 
-Requires Node.js 20 or later.
+You need [Node.js](https://nodejs.org/) 22.6 or later on your `PATH`. Nothing
+else: no npm package, no build.
 
-```sh
-npm install -g agent-dailies
-```
-
-### Claude Code plugin
-
-The plugin adds a skill (when and how to show things) and hooks: it tells the
-agent about the viewer at session start, stops `xdg-open`/image viewers/video
-players on media files in favour of `agent-dailies show`, and hands your
-comments to the agent.
+### Claude Code
 
 ```text
 /plugin marketplace add k1-c/agent-dailies
 /plugin install agent-dailies@agent-dailies
 ```
 
-Without the plugin, run `agent-dailies guide` and put its text in your
-`CLAUDE.md` / `AGENTS.md`, and wire the hooks yourself (`agent-dailies hook
-<pre-tool-use|session-start|user-prompt-submit|stop>` read the hook JSON on stdin).
+The plugin is the whole tool. Claude Code fetches this repository; the plugin's
+hooks run the code in it with Node, and at session start they put its `bin/` on
+the agent's `PATH` (through `$CLAUDE_ENV_FILE`), so the agent can simply type
+`agent-dailies show …`. The plugin also adds a skill (when and how to show
+things) and hooks that tell the agent about the viewer, stop `xdg-open`/image
+viewers/video players on media files in favour of `agent-dailies show`, and
+hand your comments to the agent.
+
+### Your own shell, or another agent
+
+Clone the repository and put `bin/` on your `PATH`:
+
+```sh
+git clone https://github.com/k1-c/agent-dailies ~/.local/share/agent-dailies-src
+ln -s ~/.local/share/agent-dailies-src/bin/agent-dailies ~/.local/bin/
+agent-dailies guide   # the instructions to give your agent (CLAUDE.md / AGENTS.md)
+```
+
+`agent-dailies hook <pre-tool-use|session-start|user-prompt-submit|stop>` reads
+a Claude Code style hook event on stdin, if your agent has hooks.
 
 ## Use
 
@@ -140,11 +149,15 @@ network you trust.
 ## Develop
 
 ```sh
-npm install
+npm install       # TypeScript and types for checking; the tool itself has no dependencies
 npm test          # node --test, TypeScript run directly by Node
 npm run verify    # typecheck, test, build
-node src/cli.ts show some.png   # run from source
+bin/agent-dailies show some.png
 ```
+
+The 3D viewer ([model-viewer](https://github.com/google/model-viewer), with
+three.js and Lit) is vendored in `web/vendor/` so the page works offline; their
+licenses are in `web/vendor/licenses/`. `npm run vendor` refreshes it.
 
 ## License
 

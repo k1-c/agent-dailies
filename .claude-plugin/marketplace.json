@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "agent-dailies",
-      "source": "./agent-plugin",
+      "source": "./",
       "description": "Show what the agent makes in one live browser tab instead of opening windows, and bring the user's marks and comments back to the agent"
     }
   ]

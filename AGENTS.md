@@ -7,11 +7,12 @@ npm install
 npm test            # node --test over test/**/*.test.ts (Node runs the TypeScript directly)
 npm run typecheck
 npm run verify      # typecheck + test + build; run before every commit
-node src/cli.ts …   # run the CLI from source
+bin/agent-dailies … # run the CLI from source (what the plugin runs)
+claude plugin validate .
 ```
 
 Point a manual run at a scratch store so it never touches the real one:
-`AGENT_DAILIES_HOME=$(mktemp -d) AGENT_DAILIES_PORT=47901 AGENT_DAILIES_NO_OPEN=1 node src/cli.ts show x.png`.
+`AGENT_DAILIES_HOME=$(mktemp -d) AGENT_DAILIES_PORT=47901 AGENT_DAILIES_NO_OPEN=1 bin/agent-dailies show x.png`.
 
 ## Layout
 
@@ -21,7 +22,10 @@ Point a manual run at a scratch store so it never touches the real one:
   `src/hook.ts` — agent hooks and the guide text; `src/where.ts` — repository/worktree/issue/session.
 - `web/` — the page: plain HTML, CSS and JavaScript, no build step. Strings live in `web/i18n.js`
   (English and Japanese).
-- `agent-plugin/` — the Claude Code plugin (skill + hooks); `.claude-plugin/marketplace.json` lists it.
+- The repository root is the Claude Code plugin: `.claude-plugin/` (plugin and marketplace
+  manifests, the plugin's source is `./`), `hooks/` (hooks.json and `run.sh`), `skills/`.
+  `bin/agent-dailies` runs `src/cli.ts` with Node directly, so a plain clone works with no install.
+- `web/vendor/` — model-viewer, vendored (with its licenses) so the page works offline.
 
 ## Invariants
 
@@ -33,6 +37,8 @@ Point a manual run at a scratch store so it never touches the real one:
   cannot start.
 - TypeScript stays erasable (`erasableSyntaxOnly`): no enums, namespaces or parameter properties,
   so Node can run the sources and tests without a build. Relative imports use `.ts`.
+- No runtime dependencies. The plugin is a git checkout with no `npm install`; anything the page
+  needs is vendored under `web/vendor/`.
 - Hooks must be quick and quiet: exit 0 with no output unless they have something to say; exit 2
   (stderr to the agent) only to block on purpose.
 - The viewer binds to 127.0.0.1 by default and checks `Host`, `Origin` and the JSON content type

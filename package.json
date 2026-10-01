@@ -24,28 +24,31 @@
     "agent-dailies": "dist/cli.js"
   },
   "files": [
+    "bin",
     "dist",
+    "src",
     "web",
-    "agent-plugin",
+    "hooks",
+    "skills",
+    ".claude-plugin",
     "README.md",
     "README.ja.md",
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.6"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
     "verify": "npm run typecheck && npm test && npm run build",
-    "prepack": "npm run build"
-  },
-  "dependencies": {
-    "@google/model-viewer": "^4.0.0"
+    "prepack": "npm run build",
+    "vendor": "cp node_modules/@google/model-viewer/dist/model-viewer.min.js web/vendor/"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "@google/model-viewer": "^4.3.1"
   }
 }

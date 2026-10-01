@@ -17,20 +17,20 @@
 
 ## 入れ方
 
-Node.js 20 以降が要ります。
+[Node.js](https://nodejs.org/) 22.6 以降が `PATH` にあればよく、ほかに入れる物はありません（npm のパッケージもビルドも要りません）。
 
-```sh
-npm install -g agent-dailies
-```
-
-### Claude Code のプラグイン
+### Claude Code
 
 ```text
 /plugin marketplace add k1-c/agent-dailies
 /plugin install agent-dailies@agent-dailies
 ```
 
-スキル（いつどう見せるか）と hook が入ります。hook はセッションの始まりにページのことを伝え、メディアのファイルを `xdg-open` や画像ビューア・動画プレイヤーで開こうとしたら `agent-dailies show` を使うよう止め、コメントをエージェントに渡します。
+プラグインがそのまま道具の全部です。Claude Code がこのリポジトリを取ってきて、プラグインの hook が中のコードを Node で動かし、セッションの始まりに `bin/` をエージェントのシェルの `PATH` に足します（`$CLAUDE_ENV_FILE`）。なのでエージェントはそのまま `agent-dailies show …` と打てます。いつどう見せるかのスキルと、ページのことを伝え、メディアを窓で開くのを止めて `show` を使わせ、コメントを渡す hook も入ります。
+
+### 自分のシェルや、ほかのエージェントで
+
+リポジトリをクローンして `bin/` を `PATH` に通します（`ln -s <clone>/bin/agent-dailies ~/.local/bin/`）。エージェントに渡す説明は `agent-dailies guide` で出ます。
 
 ## 使い方
 

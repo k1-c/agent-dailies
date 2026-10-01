@@ -62,6 +62,27 @@ test("show starts the viewer, and a comment wakes watch", async () => {
 	assert.match(context.stdout, /make it bigger/);
 });
 
+test("the launcher runs the sources with no install", async () => {
+	const launcher = fileURLToPath(new URL("../bin/agent-dailies", import.meta.url));
+	const { stdout } = await promisify(execFile)("sh", [launcher, "--version"], { env });
+	assert.match(stdout, /^\d+\.\d+\.\d+\n$/);
+});
+
+test("the plugin hook script puts the launcher on PATH at session start", async () => {
+	const script = fileURLToPath(new URL("../hooks/run.sh", import.meta.url));
+	const envFile = writeFile(dir, "claude-env", "");
+	const child = execFile("sh", [script, "session-start"], { env: { ...env, CLAUDE_ENV_FILE: envFile, CLAUDE_PLUGIN_ROOT: "" } });
+	child.stdin!.end(JSON.stringify({ session_id: "x", cwd: dir }));
+	const output = await new Promise<string>((resolve) => {
+		let text = "";
+		child.stdout!.on("data", (chunk: Buffer) => (text += chunk.toString()));
+		child.on("exit", () => resolve(text));
+	});
+	assert.match(output, /agent-dailies show/);
+	const { readFileSync } = await import("node:fs");
+	assert.match(readFileSync(envFile, "utf8"), /^export PATH=".*\/bin:\$PATH"$/m);
+});
+
 test("the PreToolUse hook blocks opening an image", async () => {
 	const result = await run(["hook", "pre-tool-use"], JSON.stringify({ tool_name: "Bash", tool_input: { command: "xdg-open shot.png" } }));
 	assert.equal(result.code, 2);

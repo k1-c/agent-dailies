@@ -1,0 +1,36 @@
+#!/bin/sh
+# Runs agent-dailies from this checkout (the Claude Code plugin's copy, or a
+# clone), with no install step: Node runs the TypeScript sources directly.
+# Node 22.18+ / 23.6+ strip types by default; 22.6–22.17 need the flag.
+
+self="$0"
+while [ -L "$self" ]; do
+	link="$(readlink "$self")"
+	case "$link" in
+		/*) self="$link" ;;
+		*) self="$(dirname "$self")/$link" ;;
+	esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd)"
+
+if ! command -v node >/dev/null 2>&1; then
+	echo "agent-dailies: Node.js 22.6 or later is needed, and node is not on PATH" >&2
+	exit 127
+fi
+
+version="$(node -p 'process.versions.node' 2>/dev/null)"
+major="${version%%.*}"
+rest="${version#*.}"
+minor="${rest%%.*}"
+
+if [ -f "$root/dist/cli.js" ] && [ ! -f "$root/src/cli.ts" ]; then
+	exec node "$root/dist/cli.js" "$@"
+fi
+if [ "$major" -gt 23 ] || { [ "$major" -eq 23 ] && [ "$minor" -ge 6 ]; } || { [ "$major" -eq 22 ] && [ "$minor" -ge 18 ]; }; then
+	exec node "$root/src/cli.ts" "$@"
+fi
+if [ "$major" -eq 22 ] && [ "$minor" -ge 6 ] || [ "$major" -eq 23 ]; then
+	exec node --experimental-strip-types --no-warnings=ExperimentalWarning "$root/src/cli.ts" "$@"
+fi
+echo "agent-dailies: Node.js 22.6 or later is needed (found $version)" >&2
+exit 1
