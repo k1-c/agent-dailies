@@ -9,7 +9,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { version } from "./config.ts";
+import { compareVersions, version } from "./config.ts";
 import { disposition, namedPath, needsTranscode, playableVideo, safeName } from "./files.ts";
 import { ISSUE_KEY, sameIssue, type IssueInfo } from "./issues.ts";
 import {
@@ -90,7 +90,10 @@ export class DailiesServer {
 	port = 0;
 	host: string;
 
-	constructor(store: Store, options: { host: string; allowedHosts?: string[] }) {
+	private readonly onShutdown: () => void;
+
+	constructor(store: Store, options: { host: string; allowedHosts?: string[]; onShutdown?: () => void }) {
+		this.onShutdown = options.onShutdown ?? (() => process.exit(0));
 		this.store = store;
 		this.catalog = store.load();
 		this.selection = store.readSelection();
@@ -131,7 +134,10 @@ export class DailiesServer {
 		this.clients.clear();
 		for (const set of this.watchers.values()) for (const watcher of set) watcher.end();
 		this.watchers.clear();
-		return new Promise((done) => this.http.close(() => done()));
+		const closed = new Promise<void>((done) => this.http.close(() => done()));
+		// Open streams and kept-alive sockets would hold the old viewer alive, unseen.
+		this.http.closeAllConnections();
+		return closed;
 	}
 
 	get viewers(): number {
@@ -348,10 +354,26 @@ export class DailiesServer {
 				}
 				case "/api/select":
 					return sendJson(response, 200, this.select(body.post ? String(body.post) : null, body.item ? String(body.item) : undefined));
-				case "/api/shutdown":
+				case "/api/shutdown": {
+					// Several agent sessions can run different versions of the CLI side by side
+					// (each loaded the plugin when it started). Only a newer one may replace this
+					// viewer, or `stop` on purpose; otherwise they would take turns replacing
+					// each other's viewer forever.
+					const theirs = typeof body.version === "string" ? body.version : "";
+					if (!body.force && !(theirs && compareVersions(theirs, version()) > 0)) {
+						return sendJson(response, 409, { error: `this viewer (${version()}) is not older than ${theirs || "the caller"}; keep using it`, version: version() });
+					}
 					sendJson(response, 200, { ok: true });
-					setImmediate(() => void this.close().then(() => process.exit(0)));
+					setImmediate(() => {
+						const exit = setTimeout(this.onShutdown, 1500);
+						exit.unref();
+						void this.close().then(() => {
+							clearTimeout(exit);
+							this.onShutdown();
+						});
+					});
 					return;
+				}
 			}
 			throw new HttpError(404, `no ${path}`);
 		}

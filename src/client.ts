@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { version } from "./config.ts";
+import { compareVersions, version } from "./config.ts";
 
 export interface Health {
 	ok: boolean;
@@ -83,9 +83,14 @@ export async function ensureServer(options: { host: string; port: number; home: 
 				`port ${options.port} is used by an agent-dailies viewer over another store (${health.home}); set AGENT_DAILIES_PORT to use another port`,
 			);
 		}
-		if (health.version === version()) return client;
+		// The same or a newer viewer serves this CLI fine (the API only grows).
+		if (compareVersions(health.version, version()) >= 0) return client;
 		// An older viewer from before an upgrade: replace it so the page matches the CLI.
-		await client.post("api/shutdown", {}).catch(() => undefined);
+		const refused = await client
+			.post("api/shutdown", { version: version() })
+			.then(() => false)
+			.catch(() => true);
+		if (refused) return client;
 		for (let tries = 0; tries < 30 && (await client.health()); tries++) await sleep(100);
 	}
 	mkdirSync(options.home, { recursive: true });

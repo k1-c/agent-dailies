@@ -39,3 +39,14 @@ export function version(): string {
 	cachedVersion = (JSON.parse(readFileSync(url, "utf8")) as { version: string }).version;
 	return cachedVersion;
 }
+
+/** Compares two "x.y.z" versions: negative when a is older than b. */
+export function compareVersions(a: string, b: string): number {
+	const parts = (value: string) => value.split(/[.+-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+	const [x, y] = [parts(a), parts(b)];
+	for (let index = 0; index < 3; index++) {
+		const difference = (x[index] ?? 0) - (y[index] ?? 0);
+		if (difference) return difference;
+	}
+	return 0;
+}

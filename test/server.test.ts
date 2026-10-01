@@ -11,12 +11,13 @@ let server: DailiesServer;
 let base: string;
 let store: Store;
 let items: Item[];
+let shutdowns = 0;
 
 before(async () => {
 	const dir = tempDir();
 	store = new Store(join(dir, "home"), "box");
 	items = [await store.addFile(writeFile(dir, "left.png", PNG)), await store.addFile(writeFile(dir, "right.txt", "hello world"))];
-	server = new DailiesServer(store, { host: "127.0.0.1" });
+	server = new DailiesServer(store, { host: "127.0.0.1", onShutdown: () => (shutdowns += 1) });
 	await server.listen(0);
 	base = `http://127.0.0.1:${server.port}`;
 });
@@ -229,4 +230,20 @@ test("an issue is recorded once per change, and an agent's fields merge with the
 	assert.equal(state.posts.length, 0);
 	assert.equal(state.issue.title, "Capes");
 	assert.ok(state.tree.length > 0);
+});
+
+test("only a newer version (or stop on purpose) may shut the viewer down", async () => {
+	const { compareVersions, version } = await import("../src/config.ts");
+	assert.ok(compareVersions("0.10.0", "0.9.9") > 0);
+	assert.ok(compareVersions("0.3.0", "0.5.0") < 0);
+	assert.equal(compareVersions("1.2.3", "1.2.3"), 0);
+
+	assert.equal((await post("/api/shutdown", {})).status, 409);
+	assert.equal((await post("/api/shutdown", { version: "0.0.1" })).status, 409);
+	assert.equal((await post("/api/shutdown", { version: version() })).status, 409);
+	assert.equal(shutdowns, 0);
+	const [major, minor] = version().split(".").map(Number);
+	assert.equal((await post("/api/shutdown", { version: `${major}.${(minor ?? 0) + 1}.0` })).status, 200);
+	for (let tries = 0; tries < 40 && !shutdowns; tries++) await new Promise((resolve) => setTimeout(resolve, 50));
+	assert.equal(shutdowns, 1);
 });

@@ -786,7 +786,7 @@ async function serve(args: string[]): Promise<void> {
 async function stop(): Promise<void> {
 	const viewer = client();
 	if (!(await viewer.health())) return out("The viewer is not running.");
-	await viewer.post("api/shutdown", {});
+	await viewer.post("api/shutdown", { force: true });
 	out("Stopped the viewer.");
 }
 
