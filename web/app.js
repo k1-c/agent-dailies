@@ -26,6 +26,7 @@
 	const unreadLanes = new Set();
 	let hasMore = false;
 	let connectedOnce = false;
+	let pageVersion = null;
 	let modelViewerLoading = null;
 
 	function load(key) {
@@ -1099,7 +1100,11 @@
 	function connect() {
 		renderStatus("connecting");
 		const source = new EventSource("/api/events");
-		source.addEventListener("hello", () => {
+		source.addEventListener("hello", (event) => {
+			// A newer viewer took over (after an upgrade): load its page.
+			const { version } = JSON.parse(event.data || "{}");
+			if (pageVersion && version && version !== pageVersion) return location.reload();
+			pageVersion = version;
 			renderStatus("live");
 			// After a reconnect, catch up on whatever arrived while we were away.
 			if (connectedOnce) loadState({ reset: true }).catch((error) => console.error(error));
