@@ -124,7 +124,83 @@ export interface AnswerEvent {
 	by: Author;
 }
 
-export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent;
+/** What is known about an issue (from the tracker, or as the agent described it). The latest wins. */
+export interface IssueEvent {
+	type: "issue";
+	id: string;
+	at: string;
+	machine: string;
+	/** As in posts: SUMM-239. */
+	key: string;
+	title?: string;
+	/** The issue's description, Markdown. */
+	description?: string;
+	status?: string;
+	url?: string;
+	/** Short facts to show beside the status: project, milestone, labels. */
+	details?: string[];
+	by: Author;
+}
+
+export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent;
+
+export interface ListFilter {
+	limit?: number;
+	/** A post id to page from. */
+	before?: string;
+	project?: string;
+	lane?: string;
+	issue?: string;
+	session?: string;
+	/** Words to find in titles, notes, file names, questions. */
+	q?: string;
+	/** Only posts with questions still unanswered. */
+	open?: boolean;
+}
+
+export interface SessionNode {
+	session: string;
+	first: string;
+	last: string;
+	count: number;
+	/** The first post's title, to tell sessions apart. */
+	title: string;
+	open: number;
+}
+
+/** An issue's posts, or a branch's when it names no issue. */
+export interface GroupNode {
+	id: string;
+	project: string;
+	issue?: string;
+	lane: string;
+	branch?: string;
+	title: string;
+	status?: string;
+	count: number;
+	last: string;
+	open: number;
+	sessions: SessionNode[];
+}
+
+export interface ProjectNode {
+	project: string;
+	last: string;
+	groups: GroupNode[];
+}
+
+/** `shunkimura/summ-239-familiar-recolor` with SUMM-239 → `familiar recolor`. */
+export function titleFromBranch(branch: string | undefined, issue: string | undefined): string | undefined {
+	if (!branch || !issue) return undefined;
+	const at = branch.toLowerCase().indexOf(issue.toLowerCase());
+	if (at < 0) return undefined;
+	const rest = branch
+		.slice(at + issue.length)
+		.replace(/^[-_/.\s]+/, "")
+		.replace(/[-_]+/g, " ")
+		.trim();
+	return rest || undefined;
+}
 
 export interface Selection {
 	post: string;
@@ -320,6 +396,7 @@ export class Catalog {
 	private readonly verdicts = new Map<string, VerdictEvent>();
 	private readonly comments = new Map<string, CommentEvent[]>();
 	private readonly answers = new Map<string, Map<string, AnswerEvent>>();
+	private readonly issues = new Map<string, IssueEvent>();
 	readonly history: (VerdictEvent | CommentEvent | AnswerEvent)[] = [];
 
 	apply(event: DailiesEvent): void {
@@ -341,6 +418,12 @@ export class Catalog {
 				list.push(event);
 				this.comments.set(event.post, list);
 				this.history.push(event);
+				break;
+			}
+			case "issue": {
+				const key = event.key.toUpperCase();
+				const previous = this.issues.get(key);
+				if (!previous || compareEvents(previous, event) < 0) this.issues.set(key, { ...event, key });
 				break;
 			}
 			case "answer": {
@@ -385,35 +468,99 @@ export class Catalog {
 		return (post.questions ?? []).filter((question) => !this.answerOf(post.id, question.id));
 	}
 
-	/** Newest first. `before` is a post id to page from. */
-	list(options: { limit?: number; before?: string; lane?: string; project?: string; issue?: string } = {}): PostView[] {
+	issue(key: string | undefined): IssueEvent | undefined {
+		return key ? this.issues.get(key.toUpperCase()) : undefined;
+	}
+
+	matches(post: PostEvent, filter: ListFilter): boolean {
+		if (filter.project && post.project !== filter.project) return false;
+		if (filter.lane && post.lane !== filter.lane) return false;
+		if (filter.issue && post.issue?.toLowerCase() !== filter.issue.toLowerCase()) return false;
+		if (filter.session && post.session !== filter.session) return false;
+		if (filter.open && !this.openQuestions(post).length) return false;
+		if (filter.q) {
+			const words = filter.q.toLowerCase().split(/\s+/).filter(Boolean);
+			const text = [
+				post.title,
+				post.note,
+				post.issue,
+				post.lane,
+				post.branch,
+				this.issue(post.issue)?.title,
+				...post.tags,
+				...post.items.map((item) => item.name),
+				...(post.questions ?? []).flatMap((question) => [question.text, ...question.options.map((option) => option.label)]),
+			]
+				.filter(Boolean)
+				.join("\n")
+				.toLowerCase();
+			if (!words.every((word) => text.includes(word))) return false;
+		}
+		return true;
+	}
+
+	/** Newest first. */
+	list(filter: ListFilter = {}): PostView[] {
 		const out: PostView[] = [];
-		let skipping = Boolean(options.before);
+		let skipping = Boolean(filter.before);
 		for (let index = this.posts.length - 1; index >= 0; index--) {
 			const post = this.posts[index]!;
 			if (skipping) {
-				if (post.id === options.before) skipping = false;
+				if (post.id === filter.before) skipping = false;
 				continue;
 			}
-			if (options.lane && post.lane !== options.lane) continue;
-			if (options.project && post.project !== options.project) continue;
-			if (options.issue && post.issue?.toLowerCase() !== options.issue.toLowerCase()) continue;
+			if (!this.matches(post, filter)) continue;
 			out.push(this.view(post));
-			if (options.limit && out.length >= options.limit) break;
+			if (filter.limit && out.length >= filter.limit) break;
 		}
 		return out;
 	}
 
-	lanes(): { project: string; lane: string; issue?: string; count: number; last: string }[] {
-		const lanes = new Map<string, { project: string; lane: string; issue?: string; count: number; last: string }>();
+	/** Repositories → issues (or branches) → agent sessions, most recently active first. */
+	tree(): ProjectNode[] {
+		const projects = new Map<string, ProjectNode>();
+		const groups = new Map<string, GroupNode>();
+		const sessions = new Map<string, SessionNode>();
 		for (const post of this.posts) {
-			const key = `${post.project}\u0000${post.lane}`;
-			const lane = lanes.get(key) ?? { project: post.project, lane: post.lane, count: 0, last: post.at };
-			lane.count++;
-			lane.last = post.at;
-			if (post.issue) lane.issue = post.issue;
-			lanes.set(key, lane);
+			const open = this.openQuestions(post).length;
+			const project = projects.get(post.project) ?? { project: post.project, last: post.at, groups: [] };
+			project.last = post.at;
+			projects.set(post.project, project);
+
+			const groupId = post.issue ? `${post.project}\u0000issue:${post.issue.toUpperCase()}` : `${post.project}\u0000lane:${post.lane}`;
+			let group = groups.get(groupId);
+			if (!group) {
+				group = { id: groupId, project: post.project, issue: post.issue?.toUpperCase(), lane: post.lane, title: post.lane, count: 0, last: post.at, open: 0, sessions: [] };
+				groups.set(groupId, group);
+				project.groups.push(group);
+			}
+			group.count++;
+			group.last = post.at;
+			group.open += open;
+			group.lane = post.lane;
+			if (post.branch) group.branch = post.branch;
+
+			if (post.session) {
+				const sessionId = `${groupId}\u0000${post.session}`;
+				let node = sessions.get(sessionId);
+				if (!node) {
+					node = { session: post.session, first: post.at, last: post.at, count: 0, title: post.title ?? post.items.map((item) => item.name).join(", "), open: 0 };
+					sessions.set(sessionId, node);
+					group.sessions.push(node);
+				}
+				node.count++;
+				node.last = post.at;
+				node.open += open;
+			}
 		}
-		return [...lanes.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
+		for (const group of groups.values()) {
+			const issue = this.issue(group.issue);
+			group.title = issue?.title ?? titleFromBranch(group.branch, group.issue) ?? group.issue ?? group.lane;
+			group.status = issue?.status;
+			group.sessions.sort((a, b) => (a.last < b.last ? 1 : -1));
+		}
+		const ordered = [...projects.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
+		for (const project of ordered) project.groups.sort((a, b) => (a.last < b.last ? 1 : -1));
+		return ordered;
 	}
 }

@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { version } from "./config.ts";
 import { disposition, namedPath, needsTranscode, playableVideo, safeName } from "./files.ts";
+import { ISSUE_KEY, sameIssue, type IssueInfo } from "./issues.ts";
 import {
 	type AnswerEvent,
 	buildPost,
@@ -20,7 +21,9 @@ import {
 	type Author,
 	type CommentEvent,
 	type DailiesEvent,
+	type IssueEvent,
 	type Item,
+	type ListFilter,
 	type PostEvent,
 	type PostInput,
 	type PostView,
@@ -227,6 +230,40 @@ export class DailiesServer {
 		return event;
 	}
 
+	/** Records what is known about an issue, unless nothing changed. */
+	setIssue(body: Record<string, unknown>): IssueEvent {
+		const key = String(body.key ?? "").toUpperCase();
+		if (!ISSUE_KEY.test(key)) throw new HttpError(400, `not an issue key: ${body.key}`);
+		const str = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
+		const info: IssueInfo = {
+			title: str(body.title),
+			description: str(body.description),
+			status: str(body.status),
+			url: str(body.url),
+			details: Array.isArray(body.details) && body.details.length ? body.details.map(String) : undefined,
+		};
+		const current = this.catalog.issue(key);
+		// An agent filling in some fields keeps what the tracker said for the rest.
+		const merged: IssueInfo = body.merge && current ? { ...current, ...Object.fromEntries(Object.entries(info).filter(([, value]) => value !== undefined)) } : info;
+		if (current && sameIssue(current, merged)) return current;
+		const event: IssueEvent = {
+			type: "issue",
+			id: newId("s"),
+			at: new Date().toISOString(),
+			machine: this.store.machine,
+			key,
+			title: merged.title,
+			description: merged.description,
+			status: merged.status,
+			url: merged.url,
+			details: merged.details,
+			by: author(body.by),
+		};
+		this.record(event);
+		this.broadcast("issue", event);
+		return event;
+	}
+
 	private notify(post: PostEvent, event: CommentEvent | AnswerEvent): void {
 		const message = `event: feedback\ndata: ${JSON.stringify(event)}\n\n`;
 		for (const key of [post.session ? `session:${post.session}` : "", `post:${post.id}`]) {
@@ -302,6 +339,8 @@ export class DailiesServer {
 						201,
 						this.addAnswer(String(body.post), String(body.question), body.choices, body.text === undefined ? undefined : String(body.text), author(body.by)),
 					);
+				case "/api/issues":
+					return sendJson(response, 201, this.setIssue(body));
 				case "/api/path": {
 					const item = this.itemById(String(body.item));
 					if (!item) throw new HttpError(404, `no item ${body.item}`);
@@ -323,14 +362,30 @@ export class DailiesServer {
 			case "/api/health":
 				return sendJson(response, 200, { ok: true, version: version(), pid: process.pid, viewers: this.viewers, home: this.store.home });
 			case "/api/state": {
-				const limit = Math.min(Number(url.searchParams.get("limit")) || 40, 200);
-				const before = url.searchParams.get("before") ?? undefined;
+				const param = (name: string) => url.searchParams.get(name) || undefined;
+				const filter: ListFilter = {
+					limit: Math.min(Number(url.searchParams.get("limit")) || 40, 200),
+					before: param("before"),
+					project: param("project"),
+					lane: param("lane"),
+					issue: param("issue"),
+					session: param("session"),
+					q: param("q"),
+					open: url.searchParams.get("open") === "1",
+				};
 				return sendJson(response, 200, {
-					posts: this.catalog.list({ limit, before }),
-					lanes: this.catalog.lanes(),
+					posts: this.catalog.list(filter),
+					tree: this.catalog.tree(),
+					issue: this.catalog.issue(filter.issue) ?? null,
 					selection: this.selection,
 					machine: this.store.machine,
 				});
+			}
+			case "/api/tree":
+				return sendJson(response, 200, { tree: this.catalog.tree() });
+			case "/api/issue": {
+				const key = url.searchParams.get("key") ?? "";
+				return sendJson(response, 200, { issue: this.catalog.issue(key) ?? null });
 			}
 			case "/api/context":
 				return sendJson(response, 200, this.context());

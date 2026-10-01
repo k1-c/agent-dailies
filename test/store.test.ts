@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { buildPost, Store, type VerdictEvent } from "../src/store.ts";
+import { buildPost, Store, titleFromBranch, type VerdictEvent } from "../src/store.ts";
 import { PNG, tempDir, writeFile } from "./helpers.ts";
 
 test("a file is stored once per content and described by kind", async () => {
@@ -104,10 +104,11 @@ test("posts list newest first, page by id, and filter by lane and issue", async 
 		[ids[4]],
 	);
 	assert.deepEqual(
-		catalog.lanes().map((lane) => [lane.lane, lane.count]),
+		catalog.tree()[0]!.groups.map((group) => [group.issue ?? group.lane, group.count]),
 		[
-			["even", 3],
+			["SUMM-1", 1],
 			["odd", 2],
+			["even", 2],
 		],
 	);
 });
@@ -144,4 +145,37 @@ test("a post can ask questions about its files, and the latest answer counts", a
 	assert.deepEqual(catalog.openQuestions(post), []);
 	assert.deepEqual(catalog.view(post).answers.q1?.choices, ["o2"]);
 	assert.equal(catalog.view(post).answers.q1?.text, "darker");
+});
+
+test("the tree groups posts by repository, issue or branch, and session", async () => {
+	const dir = tempDir();
+	const store = new Store(join(dir, "home"), "m");
+	const item = await store.addFile(writeFile(dir, "a.png", PNG));
+	const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
+	const add = (minute: number, extra: Partial<Parameters<typeof buildPost>[0]>) =>
+		store.append(buildPost({ project: "game", lane: "main", items: [item], ...extra }, "m", at(minute)));
+	add(0, { lane: "summ-7", branch: "me/summ-7-blue-capes", issue: "SUMM-7", session: "s1", title: "Capes A/B" });
+	add(1, { lane: "main", session: "s2", title: "Notes" });
+	add(2, { lane: "summ-7", branch: "me/summ-7-blue-capes", issue: "SUMM-7", session: "s3", title: "Capes again" });
+	add(3, { project: "tool", lane: "main", title: "Other repo" });
+	store.append({ type: "issue", id: "s_1", at: at(4).toISOString(), machine: "m", key: "summ-7", title: "Blue capes", status: "In Progress", by: "agent" });
+
+	const catalog = store.load();
+	const tree = catalog.tree();
+	assert.deepEqual(tree.map((project) => project.project), ["tool", "game"]);
+	const game = tree[1]!;
+	assert.deepEqual(game.groups.map((group) => [group.issue ?? group.lane, group.title, group.count]), [
+		["SUMM-7", "Blue capes", 2],
+		["main", "main", 1],
+	]);
+	assert.equal(game.groups[0]!.status, "In Progress");
+	assert.deepEqual(game.groups[0]!.sessions.map((session) => [session.session, session.title]), [
+		["s3", "Capes again"],
+		["s1", "Capes A/B"],
+	]);
+	assert.deepEqual(catalog.list({ issue: "summ-7", session: "s1" }).map((post) => post.title), ["Capes A/B"]);
+	assert.deepEqual(catalog.list({ q: "capes AGAIN" }).map((post) => post.title), ["Capes again"]);
+	assert.deepEqual(catalog.list({ q: "blue" }).map((post) => post.title), ["Capes again", "Capes A/B"]);
+	assert.equal(titleFromBranch("me/summ-7-blue-capes", "SUMM-7"), "blue capes");
+	assert.equal(titleFromBranch("main", "SUMM-7"), undefined);
 });

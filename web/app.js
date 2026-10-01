@@ -4,7 +4,10 @@
 	const t = window.t;
 	const $ = (id) => document.getElementById(id);
 	const feed = $("feed");
-	const lanesNav = $("lanes");
+	const treeNav = $("tree");
+	const searchBox = $("search");
+	const scopeTitle = $("scope-title");
+	const issueCard = $("issue-card");
 	const openButton = $("open-questions");
 	const status = $("status");
 	const statusText = $("status-text");
@@ -19,11 +22,12 @@
 	const PAGE = 40;
 	const posts = new Map(); // id -> post view
 	const order = []; // ids, newest first
-	let lanes = [];
-	let laneFilter = load("lane") || "all";
+	let tree = [];
+	let scope = readScope();
+	let query = "";
+	let currentIssue = null;
 	let selection = null; // { post, item }
 	let freshCount = 0;
-	const unreadLanes = new Set();
 	let hasMore = false;
 	let connectedOnce = false;
 	let pageVersion = null;
@@ -64,7 +68,7 @@
 		return response.json();
 	}
 
-	const laneKey = (post) => `${post.project}\u0000${post.lane}`;
+	const groupIdOf = (post) => (post.issue ? `${post.project}\u0000issue:${post.issue.toUpperCase()}` : `${post.project}\u0000lane:${post.lane}`);
 	const blobUrl = (item) => `/blob/${item.sha256}${item.ext}`;
 	// Video containers browsers do not reliably play; the viewer converts them (src/files.ts).
 	const NEEDS_CONVERSION = new Set([".ogv", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".mpg", ".mpeg", ".m2ts", ".ts", ".3gp"]);
@@ -89,8 +93,32 @@
 		return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 	}
 
+	// Which posts the feed shows: everything, what waits for an answer, one issue
+	// (or branch), or one agent session in it. Search narrows it further on the server.
+	function readScope() {
+		try {
+			const saved = JSON.parse(load("scope") || "null");
+			if (saved && typeof saved.kind === "string") return saved;
+		} catch {
+			// A scope saved by an older page; start from everything.
+		}
+		return { kind: "all" };
+	}
+
+	function scopeGroupId(target = scope) {
+		if (target.kind !== "group" && target.kind !== "session") return null;
+		return target.issue ? `${target.project}\u0000issue:${target.issue}` : `${target.project}\u0000lane:${target.lane}`;
+	}
+
+	function inScope(post, target = scope) {
+		if (target.kind === "all") return true;
+		if (target.kind === "open") return openQuestions(post).length > 0;
+		if (groupIdOf(post) !== scopeGroupId(target)) return false;
+		return target.kind === "group" || post.session === target.session;
+	}
+
 	function visible(post) {
-		return laneFilter === "all" || laneKey(post) === laneFilter;
+		return inScope(post);
 	}
 
 	// ---- media ----
@@ -420,7 +448,9 @@
 		const inline = (value) =>
 			escape(value)
 				.replace(/`([^`]+)`/g, "<code>$1</code>")
-				.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+				.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+				.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+				.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
 		const blocks = String(text).trim().split(/\n\s*\n/);
 		const bullet = /^\s*[-*・]\s+/;
 		const html = blocks
@@ -435,6 +465,12 @@
 					run = [];
 				};
 				for (const line of block.split("\n")) {
+					const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+					if (heading) {
+						flush();
+						out.push(`<h4>${inline(heading[1])}</h4>`);
+						continue;
+					}
 					const isBullet = bullet.test(line);
 					if (run.length && isBullet !== list) flush();
 					list = isBullet;
@@ -651,9 +687,7 @@
 	}
 
 	function renderOpen() {
-		const open = order.map((id) => posts.get(id)).filter((post) => visible(post) && openQuestions(post).length);
-		openButton.hidden = open.length === 0;
-		openButton.textContent = t.openQuestions(open.reduce((sum, post) => sum + openQuestions(post).length, 0));
+		refreshTree();
 	}
 
 	function buildPostElement(post) {
@@ -737,11 +771,7 @@
 			feed.prepend(node);
 		}
 		if (arriving) {
-			trackLane(post);
-			if (!visible(post)) {
-				unreadLanes.add(laneKey(post));
-				renderLanes();
-			} else if (window.scrollY < 120 && document.visibilityState === "visible") {
+			if (window.scrollY < 120 && document.visibilityState === "visible") {
 				node.classList.add("arrived");
 			} else {
 				node.classList.add("arrived");
@@ -751,19 +781,6 @@
 		}
 		renderEmpty();
 		renderOpen();
-	}
-
-	function trackLane(post) {
-		const key = laneKey(post);
-		const lane = lanes.find((candidate) => `${candidate.project}\u0000${candidate.lane}` === key);
-		if (lane) {
-			lane.count++;
-			lane.last = post.at;
-			lanes = [lane, ...lanes.filter((candidate) => candidate !== lane)];
-		} else {
-			lanes.unshift({ project: post.project, lane: post.lane, issue: post.issue, count: 1, last: post.at });
-		}
-		renderLanes();
 	}
 
 	function setVerdict(itemId, verdict) {
@@ -822,56 +839,270 @@
 
 	// ---- chrome ----
 
-	function renderLanes() {
-		const projects = new Set(lanes.map((lane) => lane.project));
-		const button = (key, children, title) =>
+	// ---- sidebar ----
+
+	let treeTimer = 0;
+	const expanded = new Set(JSON.parse(load("expanded") || "[]"));
+	const seen = JSON.parse(load("seen") || "{}");
+
+	function refreshTree() {
+		clearTimeout(treeTimer);
+		treeTimer = setTimeout(async () => {
+			try {
+				tree = (await api("/api/tree")).tree;
+				renderTree();
+				renderScope();
+			} catch (error) {
+				console.error(error);
+			}
+		}, 250);
+	}
+
+	function findGroup(id) {
+		for (const project of tree) for (const group of project.groups) if (group.id === id) return group;
+		return null;
+	}
+
+	// A group is unread when something arrived since it was last opened. Groups
+	// seen for the first time count as read, so a fresh page is not all dots.
+	function isUnread(group) {
+		if (!(group.id in seen)) {
+			seen[group.id] = group.last;
+			save("seen", JSON.stringify(seen));
+			return false;
+		}
+		return group.last > seen[group.id];
+	}
+
+	function markSeen() {
+		const group = findGroup(scopeGroupId());
+		if (!group) return;
+		seen[group.id] = group.last;
+		save("seen", JSON.stringify(seen));
+	}
+
+	function sessionLabel(session) {
+		const date = new Date(session.first);
+		const time = `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+		return { time, title: session.title };
+	}
+
+	function treeMatches(text) {
+		const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+		return words.every((word) => text.toLowerCase().includes(word));
+	}
+
+	function renderTree() {
+		const rows = [];
+		const openTotal = tree.reduce((sum, project) => sum + project.groups.reduce((n, group) => n + group.open, 0), 0);
+		const smart = (kind, icon, label, count) =>
 			el(
 				"button",
 				{
-					class: "lane",
+					class: `side-item smart${scope.kind === kind ? " active" : ""}`,
 					type: "button",
-					"aria-pressed": String(laneFilter === key),
-					title,
-					onclick: () => setLaneFilter(key),
+					"data-scope": kind,
+					onclick: () => setScope({ kind }),
 				},
-				children,
+				[
+					el("span", { class: "side-icon", text: icon }),
+					el("span", { class: "side-label", text: label }),
+					count ? el("span", { class: `side-count${kind === "open" ? " open" : ""}`, text: String(count) }) : null,
+				],
 			);
-		const chips = [button("all", [document.createTextNode(t.all)])];
-		for (const lane of lanes) {
-			const key = `${lane.project}\u0000${lane.lane}`;
-			chips.push(
-				button(
-					key,
-					[
-						projects.size > 1 ? el("span", { class: "project", text: `${lane.project} ›` }) : null,
-						document.createTextNode(lane.lane),
-						unreadLanes.has(key) ? el("span", { class: "unread" }) : null,
-					],
-					`${lane.project} › ${lane.lane}${lane.issue ? ` (${lane.issue})` : ""}`,
-				),
+		rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0));
+		for (const project of tree) {
+			const groups = project.groups.filter(
+				(group) =>
+					!query ||
+					treeMatches(`${group.issue ?? ""} ${group.title} ${group.lane}`) ||
+					group.sessions.some((session) => treeMatches(session.title)),
 			);
+			if (!groups.length) continue;
+			rows.push(el("div", { class: "side-project", text: project.project }));
+			for (const group of groups) {
+				const active = scope.kind === "group" && scopeGroupId() === group.id;
+				const inside = scope.kind === "session" && scopeGroupId() === group.id;
+				const open = expanded.has(group.id) || inside || active || Boolean(query);
+				const caret = el("span", {
+					class: `side-caret${group.sessions.length ? "" : " empty"}`,
+					text: group.sessions.length ? (open ? "▾" : "▸") : "",
+					onclick: (event) => {
+						event.stopPropagation();
+						if (expanded.has(group.id)) expanded.delete(group.id);
+						else expanded.add(group.id);
+						save("expanded", JSON.stringify([...expanded]));
+						renderTree();
+					},
+				});
+				rows.push(
+					el(
+						"button",
+						{
+							class: `side-item group${active ? " active" : ""}${inside ? " within" : ""}`,
+							type: "button",
+							"data-group": group.id,
+							title: `${group.issue ? `${group.issue} ` : ""}${group.title}\n${group.project} › ${group.lane}`,
+							onclick: () => setScope({ kind: "group", project: group.project, issue: group.issue, lane: group.issue ? undefined : group.lane }),
+						},
+						[
+							caret,
+							group.issue ? el("span", { class: "side-key", text: group.issue }) : null,
+							el("span", { class: "side-label", text: group.issue && group.title === group.issue ? "" : group.title }),
+							isUnread(group) && !active && !inside ? el("span", { class: "unread" }) : null,
+							group.open ? el("span", { class: "side-count open", text: String(group.open) }) : null,
+							el("span", { class: "side-count", text: String(group.count) }),
+						],
+					),
+				);
+				if (!open) continue;
+				for (const session of group.sessions) {
+					if (query && !treeMatches(`${group.issue ?? ""} ${group.title} ${session.title}`)) continue;
+					const label = sessionLabel(session);
+					const current = scope.kind === "session" && scope.session === session.session && inside;
+					rows.push(
+						el(
+							"button",
+							{
+								class: `side-item session${current ? " active" : ""}`,
+								type: "button",
+								title: `${label.time} ${session.title}\n${session.session}`,
+								onclick: () =>
+									setScope({
+										kind: "session",
+										project: group.project,
+										issue: group.issue,
+										lane: group.issue ? undefined : group.lane,
+										session: session.session,
+									}),
+							},
+							[
+								el("span", { class: "side-time", text: label.time }),
+								el("span", { class: "side-label", text: label.title }),
+								session.open ? el("span", { class: "side-count open", text: String(session.open) }) : null,
+								el("span", { class: "side-count", text: String(session.count) }),
+							],
+						),
+					);
+				}
+			}
 		}
-		lanesNav.replaceChildren(...chips);
+		treeNav.replaceChildren(...rows);
+		const openCount = openTotal;
+		openButton.hidden = openCount === 0 || scope.kind === "open";
+		openButton.textContent = t.openQuestions(openCount);
 	}
 
-	function setLaneFilter(key) {
-		laneFilter = key;
-		save("lane", key);
-		unreadLanes.delete(key);
-		for (const [id, post] of posts) {
-			const node = document.getElementById(id);
-			if (node) node.hidden = !visible(post);
+	function renderScope() {
+		const group = findGroup(scopeGroupId());
+		let label = t.all;
+		if (scope.kind === "open") label = t.waiting;
+		else if (group) {
+			label = `${group.issue ? `${group.issue} ` : ""}${group.issue && group.title === group.issue ? "" : group.title}`;
+			if (scope.kind === "session") {
+				const session = group.sessions.find((candidate) => candidate.session === scope.session);
+				if (session) label += ` › ${sessionLabel(session).time}`;
+			}
 		}
-		renderLanes();
-		renderEmpty();
-		renderOpen();
+		scopeTitle.textContent = label;
+		document.title = `${freshCount ? `(${freshCount}) ` : ""}${scope.kind === "all" ? "" : `${label} — `}agent dailies`;
+		renderIssueCard(group);
+	}
+
+	function trackerName(url) {
+		try {
+			const host = new URL(url).hostname;
+			if (host.endsWith("linear.app")) return "Linear";
+			if (host.endsWith("github.com")) return "GitHub";
+			if (host.endsWith("atlassian.net")) return "Jira";
+			return host;
+		} catch {
+			return "";
+		}
+	}
+
+	function renderIssueCard(group) {
+		const key = scope.issue;
+		if (!key || (scope.kind !== "group" && scope.kind !== "session")) {
+			issueCard.hidden = true;
+			issueCard.replaceChildren();
+			return;
+		}
+		const issue = currentIssue && currentIssue.key === key ? currentIssue : null;
+		const title = issue?.title ?? group?.title ?? key;
+		const parts = [
+			el("div", { class: "issue-head" }, [
+				el("span", { class: "chip issue", text: key }),
+				issue?.status ? el("span", { class: "chip status", text: issue.status }) : null,
+				...(issue?.details ?? []).map((detail) => el("span", { class: "chip", text: detail })),
+				issue?.url
+					? el("a", { class: "issue-link", href: issue.url, target: "_blank", rel: "noopener noreferrer", text: t.openIn(trackerName(issue.url)) })
+					: null,
+			]),
+			el("h1", { class: "issue-title", text: title === key ? "" : title }),
+		];
+		if (issue?.description) {
+			const body = el("div", { class: "issue-body collapsed" }, [markdown(issue.description)]);
+			const toggle = el("button", {
+				class: "issue-more",
+				type: "button",
+				text: t.readMore,
+				onclick: () => {
+					const collapsed = body.classList.toggle("collapsed");
+					toggle.textContent = collapsed ? t.readMore : t.readLess;
+				},
+			});
+			parts.push(body, toggle);
+			requestAnimationFrame(() => {
+				if (body.scrollHeight <= body.clientHeight + 4) toggle.hidden = true;
+			});
+		} else if (!issue) {
+			parts.push(el("p", { class: "issue-empty", text: t.noIssueYet(key) }));
+		}
+		issueCard.replaceChildren(...parts);
+		issueCard.hidden = false;
+	}
+
+	async function setScope(next) {
+		scope = next;
+		save("scope", JSON.stringify(scope));
+		freshCount = 0;
+		renderFresh();
+		renderTree();
+		renderScope();
+		document.body.classList.remove("side-open");
 		window.scrollTo({ top: 0 });
+		await loadState({ reset: true });
+	}
+
+	function scopeParams(target = scope) {
+		const params = new URLSearchParams({ limit: String(PAGE) });
+		if (target.kind === "open") params.set("open", "1");
+		if (target.kind === "group" || target.kind === "session") {
+			params.set("project", target.project);
+			if (target.issue) params.set("issue", target.issue);
+			else if (target.lane) params.set("lane", target.lane);
+		}
+		if (target.kind === "session") params.set("session", target.session);
+		if (query) params.set("q", query);
+		return params;
+	}
+
+	// The sidebar's rows in order, for [ and ] to step through.
+	function stepScope(delta) {
+		const rows = [...treeNav.querySelectorAll(".side-item")];
+		if (!rows.length) return;
+		const at = rows.findIndex((row) => row.classList.contains("active"));
+		const next = rows[Math.min(rows.length - 1, Math.max(0, (at === -1 ? 0 : at) + delta))];
+		next?.click();
+		next?.scrollIntoView({ block: "nearest" });
 	}
 
 	function renderFresh() {
 		fresh.hidden = freshCount === 0;
 		fresh.textContent = t.fresh(freshCount);
-		document.title = freshCount ? `(${freshCount}) agent dailies` : "agent dailies";
+		document.title = document.title.replace(/^\(\d+\) /, "");
+		if (freshCount) document.title = `(${freshCount}) ${document.title}`;
 	}
 
 	function clearFresh() {
@@ -947,6 +1178,12 @@
 	$("lightbox-close").addEventListener("click", closeLightbox);
 	lightbox.addEventListener("click", (event) => {
 		if (event.target === lightbox || event.target === lightboxStage) closeLightbox();
+	});
+	// Double-click closes it again, the way it was opened — except on things that
+	// use double-clicks themselves (video, 3D models, text, pages).
+	lightbox.addEventListener("dblclick", (event) => {
+		if (event.target.closest("model-viewer, video, audio, pre, iframe, button, a")) return;
+		closeLightbox();
 	});
 
 	// ---- keyboard ----
@@ -1046,6 +1283,15 @@
 			case "g":
 				window.scrollTo({ top: 0, behavior: "smooth" });
 				break;
+			case "[":
+				stepScope(-1);
+				break;
+			case "]":
+				stepScope(1);
+				break;
+			case "/":
+				searchBox.focus();
+				break;
 			case "1":
 			case "2":
 			case "3":
@@ -1071,18 +1317,28 @@
 
 	// ---- loading and live updates ----
 
+	let loading = 0;
+
 	async function loadState({ reset = false } = {}) {
-		const state = await api(`/api/state?limit=${PAGE}`);
+		const ticket = ++loading;
+		const state = await api(`/api/state?${scopeParams()}`);
+		if (ticket !== loading) return; // a newer scope was chosen meanwhile
 		if (reset) {
 			posts.clear();
 			order.length = 0;
 			feed.replaceChildren();
 		}
-		lanes = state.lanes;
-		if (laneFilter !== "all" && !lanes.some((lane) => `${lane.project}\u0000${lane.lane}` === laneFilter)) laneFilter = "all";
+		tree = state.tree;
+		currentIssue = state.issue;
+		if ((scope.kind === "group" || scope.kind === "session") && !findGroup(scopeGroupId())) {
+			scope = { kind: "all" };
+			return loadState({ reset: true });
+		}
 		hasMore = state.posts.length >= PAGE;
 		for (const post of state.posts) addPost(post, { append: true });
-		renderLanes();
+		markSeen();
+		renderTree();
+		renderScope();
 		applySelection(state.selection && posts.has(state.selection.post) ? state.selection : null);
 		renderEmpty();
 	}
@@ -1090,7 +1346,9 @@
 	async function loadOlder() {
 		const oldest = order[order.length - 1];
 		if (!oldest) return;
-		const state = await api(`/api/state?limit=${PAGE}&before=${encodeURIComponent(oldest)}`);
+		const params = scopeParams();
+		params.set("before", oldest);
+		const state = await api(`/api/state?${params}`);
 		hasMore = state.posts.length >= PAGE;
 		for (const post of state.posts) addPost(post, { append: true });
 		applySelection(selection);
@@ -1110,7 +1368,19 @@
 			if (connectedOnce) loadState({ reset: true }).catch((error) => console.error(error));
 			connectedOnce = true;
 		});
-		source.addEventListener("post", (event) => addPost(JSON.parse(event.data), { arriving: true }));
+		source.addEventListener("post", (event) => {
+			const post = JSON.parse(event.data);
+			if (inScope(post) && !query) {
+				addPost(post, { arriving: true });
+				markSeen();
+			}
+			refreshTree();
+		});
+		source.addEventListener("issue", (event) => {
+			const issue = JSON.parse(event.data);
+			if (scope.issue && issue.key === scope.issue) currentIssue = issue;
+			refreshTree();
+		});
 		source.addEventListener("verdict", (event) => {
 			const data = JSON.parse(event.data);
 			setVerdict(data.item, data.verdict);
@@ -1124,21 +1394,43 @@
 		source.addEventListener("error", () => renderStatus("down"));
 	}
 
-	function goToHash() {
+	async function goToHash() {
 		const id = decodeURIComponent(location.hash.slice(1));
+		if (!id.startsWith("p_")) return;
+		if (!posts.has(id) && scope.kind !== "all") await setScope({ kind: "all" });
 		const post = posts.get(id);
 		if (!post) return;
-		if (!visible(post)) setLaneFilter("all");
-		select(post.id, post.items[0].id);
+		select(post.id, post.items[0]?.id);
 		document.getElementById(post.id)?.scrollIntoView({ block: "start" });
 	}
 
-	openButton.addEventListener("click", () => {
-		const post = order.map((id) => posts.get(id)).find((candidate) => visible(candidate) && openQuestions(candidate).length);
-		if (!post) return;
-		select(post.id, undefined);
-		document.getElementById(post.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+	openButton.addEventListener("click", () => setScope({ kind: "open" }));
+	let searchTimer = 0;
+	searchBox.placeholder = t.search;
+	searchBox.addEventListener("input", () => {
+		clearTimeout(searchTimer);
+		searchTimer = setTimeout(() => {
+			query = searchBox.value.trim();
+			renderTree();
+			loadState({ reset: true }).catch((error) => console.error(error));
+		}, 250);
 	});
+	searchBox.addEventListener("keydown", (event) => {
+		if (event.key === "Escape") {
+			searchBox.value = "";
+			searchBox.dispatchEvent(new Event("input"));
+			searchBox.blur();
+		}
+	});
+	$("side-scrim").addEventListener("click", () => document.body.classList.remove("side-open"));
+	$("side-toggle").addEventListener("click", () => {
+		if (window.matchMedia("(max-width: 900px)").matches) document.body.classList.toggle("side-open");
+		else {
+			document.body.classList.toggle("side-hidden");
+			save("side-hidden", document.body.classList.contains("side-hidden") ? "1" : "");
+		}
+	});
+	if (load("side-hidden")) document.body.classList.add("side-hidden");
 	fresh.addEventListener("click", () => {
 		window.scrollTo({ top: 0, behavior: "smooth" });
 		clearFresh();

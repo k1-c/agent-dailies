@@ -81,9 +81,9 @@ test("a post reaches open pages as it is made", async () => {
 });
 
 test("the page loads the feed, the files, and ranges of them", async () => {
-	const state = (await (await fetch(`${base}/api/state`)).json()) as { posts: PostView[]; lanes: { lane: string }[] };
+	const state = (await (await fetch(`${base}/api/state`)).json()) as { posts: PostView[]; tree: { groups: { lane: string }[] }[] };
 	assert.equal(state.posts[0]?.title, "Two options");
-	assert.deepEqual(state.lanes.map((lane) => lane.lane), ["summ-1"]);
+	assert.deepEqual(state.tree[0]!.groups.map((group) => group.lane), ["summ-1"]);
 
 	const image = await fetch(`${base}/blob/${items[0]!.sha256}.png`);
 	assert.equal(image.headers.get("content-type"), "image/png");
@@ -214,4 +214,19 @@ test("a video browsers cannot play is converted once to WebM", { skip: !hasFfmpe
 	assert.ok(existsSync(join(store.home, "derived", `${clip.sha256}.webm`)));
 	const mp4 = await fetch(`${base}/play/${items[0]!.id}`, { redirect: "manual" });
 	assert.equal(mp4.status, 302);
+});
+
+test("an issue is recorded once per change, and an agent's fields merge with the tracker's", async () => {
+	const first = await post<{ id: string; title: string }>("/api/issues", { key: "summ-1", title: "Capes", status: "Todo", by: "agent" });
+	assert.equal(first.status, 201);
+	const again = await post<{ id: string }>("/api/issues", { key: "SUMM-1", title: "Capes", status: "Todo" });
+	assert.equal(again.body.id, first.body.id);
+	const merged = await post<{ title: string; status: string; description: string }>("/api/issues", { key: "SUMM-1", description: "Make them blue", merge: true });
+	assert.deepEqual([merged.body.title, merged.body.status, merged.body.description], ["Capes", "Todo", "Make them blue"]);
+	assert.equal((await post("/api/issues", { key: "not a key" })).status, 400);
+
+	const state = (await (await fetch(`${base}/api/state?issue=SUMM-1&q=nothing-matches`)).json()) as { posts: unknown[]; issue: { title: string }; tree: unknown[] };
+	assert.equal(state.posts.length, 0);
+	assert.equal(state.issue.title, "Capes");
+	assert.ok(state.tree.length > 0);
 });

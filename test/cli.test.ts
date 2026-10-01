@@ -119,6 +119,24 @@ test("ask --file takes a review sheet with files relative to it", async () => {
 	]);
 });
 
+test("issue describes an issue, or fetches it with the configured command", async () => {
+	const set = await run(["issue", "ABC-3", "--title", "Blue capes", "--status", "Todo"]);
+	assert.equal(set.code, 0, set.stderr);
+	assert.match(set.stdout, /^ABC-3 Blue capes\nTodo/);
+	const fetched = await new Promise<{ code: number; stdout: string }>((resolve) =>
+		execFile(
+			process.execPath,
+			[CLI, "issue", "ABC-3", "--refresh", "--json"],
+			{ env: { ...env, AGENT_DAILIES_ISSUE_COMMAND: `printf '{"title":"From the tracker","body":"Details","state":"OPEN"}'` }, cwd: dir },
+			(error, stdout) => resolve({ code: error ? 1 : 0, stdout }),
+		),
+	);
+	assert.equal(fetched.code, 0);
+	const event = JSON.parse(fetched.stdout) as { title: string; description: string; status: string };
+	assert.deepEqual([event.title, event.description, event.status], ["From the tracker", "Details", "OPEN"]);
+	assert.match((await run(["issue", "ABC-3"])).stdout, /From the tracker/);
+});
+
 test("the launcher runs the sources with no install", async () => {
 	const launcher = fileURLToPath(new URL("../bin/agent-dailies", import.meta.url));
 	const { stdout } = await promisify(execFile)("sh", [launcher, "--version"], { env });

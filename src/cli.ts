@@ -1,19 +1,24 @@
 #!/usr/bin/env node
 // agent-dailies: a live review page for what a coding agent makes.
 
+import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import * as config from "./config.ts";
 import { baseUrl, Client, ensureServer, openBrowser } from "./client.ts";
 import { describeAnswer, describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
 import { guideText, preToolUse } from "./hook.ts";
+import { dueForRefresh, fetchIssue, ISSUE_KEY, issueCommandFor, markFetched, sameIssue, type IssueInfo } from "./issues.ts";
 import { DailiesServer, type Context } from "./server.ts";
 import {
 	buildPost,
+	newId,
 	Store,
 	type AnswerEvent,
 	type Catalog,
+	type IssueEvent,
 	type CommentEvent,
 	type Item,
 	type PostInput,
@@ -44,6 +49,9 @@ Usage:
   agent-dailies watch [--session ID] [--timeout 110m]
                                       Wait until the user comments on this session's posts, print it, exit.
                                       Run it in the background: its exit wakes the agent up.
+  agent-dailies issue [KEY] [--refresh] [--title T] [--description TEXT|-] [--status S] [--url U]
+                                      Show or set what an issue is about (the viewer's issue card).
+                                      --refresh runs your issueCommand (config file) for it.
   agent-dailies get <item-id|post-id:n> [--to PATH]
                                       Print a stored file's path, or copy it to PATH
   agent-dailies open                  Open the viewer in the browser
@@ -63,6 +71,9 @@ Environment:
   AGENT_DAILIES_HOST   address to listen on (default: ${config.DEFAULT_HOST}; 0.0.0.0 to reach it from other machines)
   AGENT_DAILIES_NO_OPEN=1   never open a browser from \`show\`
   AGENT_DAILIES_BROWSER     command to open URLs with
+  AGENT_DAILIES_ISSUE_COMMAND  command printing an issue as JSON ({key} is replaced), e.g.
+                            "linear-tui issue show {key} --json" — or set "issueCommand" in
+                            $XDG_CONFIG_HOME/agent-dailies/config.json (per project: "projects")
 `;
 
 type Values = Record<string, string | boolean | string[] | undefined>;
@@ -172,7 +183,108 @@ async function publish(target: Store, input: PostInput, values: Values): Promise
 	}
 	const opened = live && viewers === 0 && !values["no-open"] && process.env.AGENT_DAILIES_NO_OPEN !== "1";
 	if (opened) openBrowser(url);
+	refreshIssueLater(target, input);
 	return { post, url, viewers, live, opened };
+}
+
+// Fetches the post's issue from the tracker in the background, now and then,
+// when the user configured an issue command (see src/issues.ts).
+function refreshIssueLater(target: Store, input: PostInput): void {
+	const key = input.issue?.toUpperCase();
+	if (!key || !ISSUE_KEY.test(key) || !issueCommandFor(input.project) || !dueForRefresh(target, key)) return;
+	markFetched(target, key);
+	const cli = fileURLToPath(import.meta.url);
+	spawn(process.execPath, [...process.execArgv, cli, "issue", key, "--refresh", "--quiet", "--project", input.project], {
+		cwd: input.cwd && existsSync(input.cwd) ? input.cwd : undefined,
+		detached: true,
+		stdio: "ignore",
+	}).unref();
+}
+
+async function recordIssue(target: Store, body: Record<string, unknown>): Promise<IssueEvent> {
+	try {
+		const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
+		return await viewer.post<IssueEvent>("api/issues", body);
+	} catch {
+		// No viewer: write it down directly; it shows once the viewer runs.
+		const catalog = target.load();
+		const key = String(body.key).toUpperCase();
+		const current = catalog.issue(key);
+		const info = body as IssueInfo;
+		const merged = body.merge && current ? { ...current, ...Object.fromEntries(Object.entries(info).filter(([, value]) => value !== undefined)) } : info;
+		if (current && sameIssue(current, merged)) return current;
+		const event: IssueEvent = {
+			type: "issue",
+			id: newId("s"),
+			at: new Date().toISOString(),
+			machine: target.machine,
+			key,
+			title: merged.title,
+			description: merged.description,
+			status: merged.status,
+			url: merged.url,
+			details: merged.details,
+			by: "agent",
+		};
+		target.append(event);
+		return event;
+	}
+}
+
+async function issue(args: string[]): Promise<void> {
+	const { values, positionals } = parse(args, {
+		refresh: { type: "boolean" },
+		title: { type: "string" },
+		description: { type: "string" },
+		status: { type: "string" },
+		url: { type: "string" },
+		detail: { type: "string", multiple: true },
+		project: { type: "string" },
+		quiet: { type: "boolean" },
+		json: { type: "boolean" },
+	});
+	const key = (positionals[0] ?? detectWhere().issue ?? "").toUpperCase();
+	if (!ISSUE_KEY.test(key)) {
+		throw new Error(
+			"Usage: agent-dailies issue <KEY> [--refresh] [--title T] [--description TEXT|-] [--status S] [--url U] [--detail X]… [--json]",
+		);
+	}
+	const target = store();
+	let event: IssueEvent | undefined;
+	if (values.refresh) {
+		const project = (values.project as string | undefined) ?? detectWhere().project;
+		const command = issueCommandFor(project);
+		if (!command) throw new Error(`no issue command is set; put "issueCommand" in ${configPathText()}`);
+		markFetched(target, key);
+		const info = await fetchIssue(command, key, process.cwd());
+		event = await recordIssue(target, { key, ...info, by: "agent" });
+	} else if (values.title || values.description || values.status || values.url || values.detail) {
+		const description = values.description === "-" ? readFileSync(0, "utf8") : (values.description as string | undefined);
+		event = await recordIssue(target, {
+			key,
+			title: values.title,
+			description,
+			status: values.status,
+			url: values.url,
+			details: values.detail,
+			merge: true,
+			by: "agent",
+		});
+	} else {
+		event = target.load().issue(key);
+	}
+	if (values.quiet) return;
+	if (values.json) return out(JSON.stringify(event ?? null, null, 2));
+	if (!event) return out(`Nothing is known about ${key} yet. Describe it with --title/--description, or set an issue command and use --refresh.`);
+	const lines = [`${event.key}${event.title ? ` ${event.title}` : ""}`];
+	if (event.status || event.details?.length) lines.push([event.status, ...(event.details ?? [])].filter(Boolean).join(" · "));
+	if (event.url) lines.push(event.url);
+	if (event.description) lines.push("", event.description);
+	out(lines.join("\n"));
+}
+
+function configPathText(): string {
+	return process.env.AGENT_DAILIES_CONFIG || "$XDG_CONFIG_HOME/agent-dailies/config.json";
 }
 
 function viewerLine(published: Published): string | undefined {
@@ -442,6 +554,8 @@ async function context(args: string[]): Promise<void> {
 	}
 	lines.push(ctx.selected ? `Selected post: ${describePost(ctx.post)}` : `Nothing is selected; the newest post is ${describePost(ctx.post)}`);
 	if (ctx.post.note) lines.push(`Note: ${ctx.post.note}`);
+	const known = ctx.post.issue ? target.load().issue(ctx.post.issue) : undefined;
+	if (known) lines.push(`Issue: ${known.key}${known.title ? ` ${known.title}` : ""}${known.status ? ` (${known.status})` : ""}`);
 	lines.push("", "## Files");
 	ctx.post.items.forEach((item, index) => {
 		const selected = ctx.selection?.item === item.id ? " ← selected" : "";
@@ -784,6 +898,8 @@ async function main(argv: string[]): Promise<void> {
 			return wait(rest);
 		case "context":
 			return context(rest);
+		case "issue":
+			return issue(rest);
 		case "feedback":
 			return feedback(rest);
 		case "list":

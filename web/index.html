@@ -10,11 +10,12 @@
 	</head>
 	<body>
 		<header class="bar">
+			<button class="side-toggle" id="side-toggle" type="button" aria-label="Sidebar">☰</button>
 			<a class="brand" href="#" data-action="top" aria-label="agent dailies">
 				<img src="/icon.svg" alt="" width="22" height="22" />
 				<span>agent dailies</span>
 			</a>
-			<nav class="lanes" id="lanes" aria-label="Lanes"></nav>
+			<span class="scope-title" id="scope-title"></span>
 			<button class="open-questions" id="open-questions" type="button" hidden></button>
 			<div class="status" id="status" title="">
 				<span class="dot"></span>
@@ -24,9 +25,19 @@
 
 		<button class="fresh" id="fresh" type="button" hidden></button>
 
-		<main id="feed" class="feed" aria-live="polite"></main>
-		<div class="more" id="more" hidden><button type="button" id="more-button"></button></div>
-		<section class="empty" id="empty" hidden></section>
+		<div class="layout">
+			<aside class="sidebar" id="sidebar">
+				<input class="search" id="search" type="search" autocomplete="off" />
+				<nav class="tree" id="tree" aria-label="History"></nav>
+			</aside>
+			<div class="content">
+				<section class="issue-card" id="issue-card" hidden></section>
+				<main id="feed" class="feed" aria-live="polite"></main>
+				<div class="more" id="more" hidden><button type="button" id="more-button"></button></div>
+				<section class="empty" id="empty" hidden></section>
+			</div>
+		</div>
+		<div class="side-scrim" id="side-scrim"></div>
 
 		<footer class="keys" id="keys"></footer>
 

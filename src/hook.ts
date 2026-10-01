@@ -162,5 +162,8 @@ Hear back:
   in the background (run_in_background, timeout 7200000): it exits when the user
   comments or answers, waking you. Start it again after acting. One per session.
 - \`agent-dailies feedback\` lists what they adopted, rejected, commented and answered.
-- Posts are grouped by repository and worktree; the issue comes from the branch name.`;
+- Posts are grouped by repository, issue and session; the issue comes from the branch
+  name (or --issue). The viewer shows the issue's summary above its posts. If it has
+  none and no issue command is configured, describe the issue once:
+  \`agent-dailies issue <KEY> --title "…" --description - <<'EOF' … EOF\`.`;
 }

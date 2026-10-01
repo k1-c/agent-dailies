@@ -24,9 +24,13 @@ yesterday's renders and decides what to keep.
   [ffmpeg](https://ffmpeg.org/) if it is installed),
   audio, GLB/glTF (orbit with [model-viewer](https://modelviewer.dev/)), PDF,
   HTML, Markdown and text.
-- **Grouped by worktree** — posts carry the repository, worktree/branch, the
-  issue key from the branch name (`summ-239` → `SUMM-239`) and the agent session,
-  so parallel agents never mix.
+- **History by issue and session** — a sidebar lists repositories → issues (or
+  branches) → agent sessions, newest activity first, with unread dots, counts and
+  questions waiting; pick one to see just its posts, or search titles, files and
+  issues. Posts carry the issue key from the branch name (`summ-239` → `SUMM-239`).
+- **The issue on screen** — above an issue's posts, its title, status, project and
+  description, fetched by a command you choose (Linear, GitHub, …) or written by
+  the agent.
 - **Questions** — `agent-dailies ask` turns files and sentences into options
   A, B, C… to pick from, or takes a whole review sheet of decisions; your answers
   wake the agent.
@@ -41,7 +45,7 @@ yesterday's renders and decides what to keep.
   survive worktree cleanup and never bloat git.
 - **Keyboard first** — `j`/`k` posts, `h`/`l` files, `a` adopt, `x` reject,
   `c` comment, `f` full screen, `1`–`9` choose an option, `Enter` send it,
-  `y` copy (`Y` the path), `d` download.
+  `y` copy (`Y` the path), `d` download, `[`/`]` move through the sidebar, `/` search.
 
 ## Install
 
@@ -149,12 +153,35 @@ it has been handed over once:
 Paths point to `named/<item>/<original name>` in the store, a hard link to the
 stored copy, so the name is right and no space is used.
 
+### Issue summaries
+
+agent-dailies talks to no tracker itself. Name a command that prints an issue as
+JSON in your config file, `$XDG_CONFIG_HOME/agent-dailies/config.json`
+(`~/.config/agent-dailies/config.json`); `{key}` becomes the issue key:
+
+```json
+{
+  "issueCommand": "gh issue view {key} --json title,body,state,url",
+  "projects": {
+    "game-lab": { "issueCommand": "linear-tui issue show {key} --json" }
+  }
+}
+```
+
+When a post names an issue, the CLI runs the command in the background (at most
+every 30 minutes per issue) in the post's repository and records the title,
+description, status, URL, project, milestone and labels; Linear (`linear-tui`),
+GitHub (`gh`) and Jira-like JSON are understood. Only your own config is read —
+a repository cannot make agent-dailies run commands. Without a command, agents
+can describe an issue with `agent-dailies issue <KEY> --title … --description …`;
+`agent-dailies issue <KEY> --refresh` fetches it now.
+
 ## Where things are kept
 
 ```text
 $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
   blobs/<ab>/<sha256><ext>           files, once per content
-  log/<machine>.jsonl                append-only events: post (with its questions), verdict, comment, answer
+  log/<machine>.jsonl                append-only events: post (with its questions), verdict, comment, answer, issue
   named/<item>/<original name>       hard links under the original names (copy path)
   derived/<sha256>.webm              videos converted for the browser
   sessions/<session>.json            what each agent session has been handed
@@ -173,6 +200,8 @@ is a plain union — the groundwork for the planned sync (below).
 | `AGENT_DAILIES_NO_OPEN=1` | never open a browser from `show` |
 | `AGENT_DAILIES_BROWSER` | command to open URLs with |
 | `AGENT_DAILIES_AUTO_WATCH=0` | no Stop-hook reminder to start `watch` |
+| `AGENT_DAILIES_ISSUE_COMMAND` | the issue command, overriding the config file |
+| `AGENT_DAILIES_CONFIG` | another config file |
 
 ## Security
 
