@@ -1,0 +1,51 @@
+{
+  "name": "agent-dailies",
+  "version": "0.1.0",
+  "description": "A live review page for what your coding agent makes: it shows images, videos, audio and 3D models in one browser tab instead of opening windows, and lets you mark and comment on them.",
+  "keywords": [
+    "claude-code",
+    "coding-agent",
+    "dailies",
+    "review",
+    "viewer",
+    "assets",
+    "gamedev"
+  ],
+  "homepage": "https://github.com/k1-c/agent-dailies",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k1-c/agent-dailies.git"
+  },
+  "bugs": "https://github.com/k1-c/agent-dailies/issues",
+  "license": "MIT",
+  "author": "k1-c",
+  "type": "module",
+  "bin": {
+    "agent-dailies": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "web",
+    "agent-plugin",
+    "README.md",
+    "README.ja.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "verify": "npm run typecheck && npm test && npm run build",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@google/model-viewer": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.0"
+  }
+}

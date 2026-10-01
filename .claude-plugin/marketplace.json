@@ -1,0 +1,14 @@
+{
+  "name": "agent-dailies",
+  "owner": {
+    "name": "k1-c"
+  },
+  "description": "agent-dailies' plugin for coding agents",
+  "plugins": [
+    {
+      "name": "agent-dailies",
+      "source": "./agent-plugin",
+      "description": "Show what the agent makes in one live browser tab instead of opening windows, and bring the user's marks and comments back to the agent"
+    }
+  ]
+}

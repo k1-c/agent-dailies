@@ -1,0 +1,10 @@
+{
+  "name": "agent-dailies",
+  "version": "0.1.0",
+  "description": "Show what the agent makes in one live browser tab instead of opening windows, and bring the user's marks and comments back to the agent",
+  "author": {
+    "name": "k1-c"
+  },
+  "homepage": "https://github.com/k1-c/agent-dailies",
+  "license": "MIT"
+}

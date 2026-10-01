@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="dark light" />
+		<title>agent dailies</title>
+		<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/style.css" />
+	</head>
+	<body>
+		<header class="bar">
+			<a class="brand" href="#" data-action="top" aria-label="agent dailies">
+				<img src="/icon.svg" alt="" width="22" height="22" />
+				<span>agent dailies</span>
+			</a>
+			<nav class="lanes" id="lanes" aria-label="Lanes"></nav>
+			<div class="status" id="status" title="">
+				<span class="dot"></span>
+				<span class="status-text" id="status-text"></span>
+			</div>
+		</header>
+
+		<button class="fresh" id="fresh" type="button" hidden></button>
+
+		<main id="feed" class="feed" aria-live="polite"></main>
+		<div class="more" id="more" hidden><button type="button" id="more-button"></button></div>
+		<section class="empty" id="empty" hidden></section>
+
+		<footer class="keys" id="keys"></footer>
+
+		<div class="lightbox" id="lightbox" hidden>
+			<div class="lightbox-stage" id="lightbox-stage"></div>
+			<div class="lightbox-caption" id="lightbox-caption"></div>
+			<button class="lightbox-close" type="button" id="lightbox-close" aria-label="Close">×</button>
+		</div>
+
+		<script src="/i18n.js"></script>
+		<script src="/app.js"></script>
+	</body>
+</html>
