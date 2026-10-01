@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { DailiesServer } from "../src/server.ts";
@@ -172,4 +174,44 @@ test("answers are checked against the question, pushed to pages and to whoever w
 	assert.deepEqual((pushed as { choices: string[]; text: string }).choices, ["o2"]);
 	assert.equal((pushed as { text: string }).text, "redo it");
 	assert.deepEqual(server.catalog.openQuestions(server.catalog.post(postId)!), []);
+});
+
+test("a file comes back under its own name: to save, and as a path for upload dialogs", async () => {
+	const item = items[0]!;
+	const saved = await fetch(`${base}/files/${item.id}/left.png?download`);
+	assert.equal(saved.status, 200);
+	assert.equal(saved.headers.get("content-type"), "image/png");
+	assert.match(saved.headers.get("content-disposition") ?? "", /^attachment; filename="left\.png"; filename\*=UTF-8''left\.png$/);
+	assert.match((await fetch(`${base}/files/${item.id}/x`)).headers.get("content-disposition") ?? "", /^inline;/);
+	assert.equal((await fetch(`${base}/files/i_nope/x`)).status, 404);
+
+	const { body } = await post<{ path: string }>("/api/path", { item: item.id });
+	assert.match(body.path, /\/named\/i_[a-z0-9]+\/left\.png$/);
+	assert.deepEqual(readFileSync(body.path), PNG);
+	assert.equal(statSync(body.path).nlink >= 2, true);
+	assert.equal((await post<{ path: string }>("/api/path", { item: item.id })).body.path, body.path);
+});
+
+function hasFfmpeg(): boolean {
+	try {
+		const encoders = execFileSync("ffmpeg", ["-hide_banner", "-encoders"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+		return ["libtheora", "libvpx-vp9", "libopus"].every((name) => encoders.includes(name));
+	} catch {
+		return false;
+	}
+}
+
+test("a video browsers cannot play is converted once to WebM", { skip: !hasFfmpeg() && "ffmpeg with libtheora, libvpx-vp9 and libopus is not installed" }, async () => {
+	const dir = join(store.home, "..");
+	const ogv = join(dir, "clip.ogv");
+	execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10:duration=1", "-c:v", "libtheora", ogv]);
+	const clip = await store.addFile(ogv);
+	await post("/api/posts", { project: "game", lane: "summ-1", items: [clip] });
+	const played = await fetch(`${base}/play/${clip.id}`);
+	assert.equal(played.status, 200);
+	assert.equal(played.headers.get("content-type"), "video/webm");
+	assert.ok((await played.arrayBuffer()).byteLength > 100);
+	assert.ok(existsSync(join(store.home, "derived", `${clip.sha256}.webm`)));
+	const mp4 = await fetch(`${base}/play/${items[0]!.id}`, { redirect: "manual" });
+	assert.equal(mp4.status, 302);
 });

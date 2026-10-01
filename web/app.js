@@ -65,6 +65,10 @@
 
 	const laneKey = (post) => `${post.project}\u0000${post.lane}`;
 	const blobUrl = (item) => `/blob/${item.sha256}${item.ext}`;
+	// Video containers browsers do not reliably play; the viewer converts them (src/files.ts).
+	const NEEDS_CONVERSION = new Set([".ogv", ".mov", ".avi", ".mkv", ".wmv", ".flv", ".mpg", ".mpeg", ".m2ts", ".ts", ".3gp"]);
+	// The same file under its own name, for saving and dragging out.
+	const fileUrl = (item) => `/files/${item.id}/${encodeURIComponent(item.name)}`;
 
 	function ago(at) {
 		const seconds = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 1000));
@@ -135,11 +139,31 @@
 	function media(item, { large = false } = {}) {
 		const src = blobUrl(item);
 		switch (item.kind) {
-			case "image":
-				return el("img", { src, alt: item.name, loading: large ? "eager" : "lazy", decoding: "async" });
+			case "image": {
+				const image = el("img", { src, alt: item.name, loading: large ? "eager" : "lazy", decoding: "async" });
+				makeDraggable(image, item);
+				return image;
+			}
 			case "video": {
-				const video = el("video", { src, muted: true, loop: true, playsinline: true, controls: true, preload: "metadata" });
+				// Formats the browser cannot play (Ogg Theora in Chrome) go through the
+				// viewer, which converts them once with ffmpeg.
+				// canPlayType("video/ogg") says "maybe" in Chrome, which cannot decode
+				// Theora, so the extension decides, and a failed play retries converted.
+				const convert = NEEDS_CONVERSION.has(item.ext) || document.createElement("video").canPlayType(item.mime) === "";
+				const video = el("video", { src: convert ? `/play/${item.id}` : src, muted: true, loop: true, playsinline: true, controls: true, preload: "metadata" });
 				video.muted = true;
+				video.addEventListener("error", () => {
+					if (!video.src.includes("/play/")) {
+						video.src = `/play/${item.id}`;
+						return;
+					}
+					const box = el("div", { class: "file" }, [
+						el("div", { class: "glyph", text: "▶" }),
+						el("div", { text: t.cannotPlay }),
+						el("a", { href: `${fileUrl(item)}?download`, text: t.download, onclick: (event) => event.stopPropagation() }),
+					]);
+					video.replaceWith(box);
+				});
 				if (large) video.autoplay = true;
 				else players.observe(video);
 				return video;
@@ -175,9 +199,128 @@
 				return el("div", { class: "file" }, [
 					el("div", { class: "glyph", text: "▤" }),
 					el("div", { text: item.name }),
-					el("a", { href: src, download: item.name, text: t.download, onclick: (event) => event.stopPropagation() }),
+					el("a", { href: `${fileUrl(item)}?download`, download: item.name, text: t.download, onclick: (event) => event.stopPropagation() }),
 				]);
 		}
+	}
+
+	// ---- getting files out: copy, download, drag ----
+
+	const toastBox = el("div", { class: "toast", role: "status", hidden: true });
+	document.body.append(toastBox);
+	let toastTimer = 0;
+
+	function toast(text, kind = "ok") {
+		toastBox.textContent = text;
+		toastBox.dataset.kind = kind;
+		toastBox.hidden = false;
+		clearTimeout(toastTimer);
+		toastTimer = setTimeout(() => (toastBox.hidden = true), kind === "ok" ? 2600 : 5000);
+	}
+
+	// What "copy" puts on the clipboard: the picture for still images, the text
+	// for text files, and for everything else (video, audio, models, GIFs, which
+	// a web page cannot put on the clipboard as files) a path to the file under its
+	// own name, to paste into an upload dialog.
+	function copyMode(item) {
+		if (item.kind === "image" && item.ext !== ".gif") return "image";
+		if (item.kind === "text" && item.size <= 2 * 1024 * 1024) return "text";
+		return "path";
+	}
+
+	async function toPng(blob) {
+		if (blob.type === "image/png") return blob;
+		const url = URL.createObjectURL(blob);
+		try {
+			const image = new Image();
+			image.decoding = "async";
+			image.src = url;
+			await image.decode();
+			const canvas = document.createElement("canvas");
+			canvas.width = image.naturalWidth || 1024;
+			canvas.height = image.naturalHeight || 1024;
+			canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+			return await new Promise((resolve, reject) => canvas.toBlob((png) => (png ? resolve(png) : reject(new Error("PNG"))), "image/png"));
+		} finally {
+			URL.revokeObjectURL(url);
+		}
+	}
+
+	function copyItem(item, forcePath = false) {
+		const mode = forcePath ? "path" : copyMode(item);
+		// The clipboard write starts right away (inside the click) with a promise
+		// for the contents, so the browser does not refuse it for lack of a gesture.
+		const contents =
+			mode === "image"
+				? fetch(blobUrl(item)).then((response) => response.blob()).then(toPng)
+				: mode === "text"
+					? fetch(blobUrl(item))
+							.then((response) => response.text())
+							.then((text) => new Blob([text], { type: "text/plain" }))
+					: api("/api/path", { item: item.id }).then(({ path }) => new Blob([path], { type: "text/plain" }));
+		const type = mode === "image" ? "image/png" : "text/plain";
+		navigator.clipboard
+			.write([new ClipboardItem({ [type]: contents })])
+			.then(() => toast(mode === "image" ? t.copiedImage : mode === "text" ? t.copiedText : t.copiedPath(item.name)))
+			.catch((error) => {
+				console.error(error);
+				toast(t.copyFailed, "error");
+			});
+	}
+
+	function downloadItem(item) {
+		const link = el("a", { href: `${fileUrl(item)}?download`, download: item.name });
+		document.body.append(link);
+		link.click();
+		link.remove();
+	}
+
+	async function downloadAll(post) {
+		for (const item of post.items) {
+			downloadItem(item);
+			// Browsers drop downloads started in the same instant.
+			await new Promise((resolve) => setTimeout(resolve, 350));
+		}
+		toast(t.downloadedAll(post.items.length));
+	}
+
+	// Dragging a file out: to the desktop or a file manager it arrives as the file
+	// (Chrome's DownloadURL); to another page, images arrive as images and anything
+	// else as its link.
+	function makeDraggable(handle, item) {
+		handle.setAttribute("draggable", "true");
+		handle.addEventListener("dragstart", (event) => {
+			const url = new URL(fileUrl(item), location.href).href;
+			event.dataTransfer.setData("DownloadURL", `${item.mime.split(";")[0]}:${item.name}:${url}`);
+			event.dataTransfer.setData("text/uri-list", url);
+			event.dataTransfer.setData("text/plain", url);
+			event.dataTransfer.effectAllowed = "copy";
+		});
+	}
+
+	function fileActions(post, item, { withFull = false } = {}) {
+		const button = (text, title, onclick) =>
+			el("button", {
+				class: "act icon",
+				type: "button",
+				title,
+				"aria-label": title,
+				text,
+				onclick: (event) => {
+					event.stopPropagation();
+					onclick(event);
+				},
+			});
+		return [
+			button("⧉", `${t.copyTitle(copyMode(item))} (y)`, (event) => copyItem(item, event.shiftKey)),
+			button("⤓", `${t.downloadTitle} (d)`, () => downloadItem(item)),
+			withFull
+				? button("⤢", `${t.full} (f)`, () => {
+						select(post.id, item.id);
+						openLightbox(post.id, item.id);
+					})
+				: null,
+		];
 	}
 
 	// ---- building posts ----
@@ -214,27 +357,12 @@
 				toggleVerdict(post.id, item.id, "rejected");
 			},
 		});
-		const full = el("button", {
-			class: "act icon",
-			type: "button",
-			title: `${t.full} (f)`,
-			"aria-label": t.full,
-			text: "⤢",
-			onclick: (event) => {
-				event.stopPropagation();
-				select(post.id, item.id);
-				openLightbox(post.id, item.id);
-			},
-		});
+		const name = el("span", { class: "name", title: `${item.source || item.name}\n${t.dragHint}`, text: item.name });
+		makeDraggable(name, item);
+		if (item.kind !== "image") makeDraggable(stage, item);
 		tile.append(
 			stage,
-			el("div", { class: "tile-foot" }, [
-				el("span", { class: "name", title: item.source || item.name, text: item.name }),
-				el("span", { class: "size", text: size(item.size) }),
-				adopt,
-				reject,
-				full,
-			]),
+			el("div", { class: "tile-foot" }, [name, el("span", { class: "size", text: size(item.size) }), ...fileActions(post, item, { withFull: true }), adopt, reject]),
 		);
 		tile.addEventListener("click", () => select(post.id, item.id));
 		tile.addEventListener("dblclick", (event) => {
@@ -370,6 +498,7 @@
 				el("div", { class: "o-head" }, [
 					el("span", { class: "o-key", text: option.key }),
 					el("span", { class: "o-label", text: option.label || items.map((item) => item.name).join(", ") }),
+					...(items.length === 1 ? fileActions(post, items[0]) : []),
 					el("span", { class: "o-num", text: index < 9 ? String(index + 1) : "" }),
 				]),
 			);
@@ -534,6 +663,18 @@
 			post.issue ? el("span", { class: "chip issue", text: post.issue }) : null,
 			...(post.tags || []).map((tag) => el("span", { class: "chip tag", text: tag })),
 			post.items.length > 1 ? el("span", { class: "time", text: t.files(post.items.length) }) : null,
+			post.items.length > 1
+				? el("button", {
+						class: "act all",
+						type: "button",
+						text: `⤓ ${t.downloadAll}`,
+						title: t.downloadAllTitle,
+						onclick: (event) => {
+							event.stopPropagation();
+							downloadAll(post);
+						},
+					})
+				: null,
 			el("time", { class: "time", datetime: post.at, title: new Date(post.at).toLocaleString(), text: ago(post.at) }),
 		]);
 		if (post.questions?.length) meta.prepend(el("span", { class: "chip state" }));
@@ -783,7 +924,10 @@
 		const item = post.items[lightboxAt.index];
 		lightboxStage.replaceChildren(media(item, { large: true }));
 		const position = post.items.length > 1 ? `${lightboxAt.index + 1} / ${post.items.length} · ` : "";
-		lightboxCaption.textContent = `${position}${item.name}${post.title ? ` — ${post.title}` : ""}`;
+		lightboxCaption.replaceChildren(
+			el("span", { text: `${position}${item.name}${post.title ? ` — ${post.title}` : ""}` }),
+			...fileActions(post, item),
+		);
 		select(post.id, item.id);
 	}
 
@@ -805,6 +949,11 @@
 	});
 
 	// ---- keyboard ----
+
+	function selectedItem() {
+		const post = selection && posts.get(selection.post);
+		return post?.items.find((item) => item.id === selection.item);
+	}
 
 	function visibleIds() {
 		return order.filter((id) => visible(posts.get(id)));
@@ -839,6 +988,8 @@
 			else if (event.key === "ArrowRight" || event.key === "l") stepLightbox(1);
 			else if (event.key === "ArrowLeft" || event.key === "h") stepLightbox(-1);
 			else if ((event.key === "a" || event.key === "x") && selection?.item) toggleVerdict(selection.post, selection.item, event.key === "a" ? "adopted" : "rejected");
+			else if ((event.key === "y" || event.key === "Y") && selectedItem()) copyItem(selectedItem(), event.key === "Y");
+			else if (event.key === "d" && selectedItem()) downloadItem(selectedItem());
 			else return;
 			event.preventDefault();
 			return;
@@ -864,6 +1015,17 @@
 			case "x":
 				if (selection?.item) toggleVerdict(selection.post, selection.item, event.key === "a" ? "adopted" : "rejected");
 				break;
+			case "y":
+			case "Y": {
+				const item = selectedItem();
+				if (item) copyItem(item, event.key === "Y");
+				break;
+			}
+			case "d": {
+				const item = selectedItem();
+				if (item) downloadItem(item);
+				break;
+			}
 			case "c":
 				if (selection) document.getElementById(selection.post)?.querySelector(".compose input")?.focus();
 				break;

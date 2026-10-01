@@ -10,6 +10,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { version } from "./config.ts";
+import { disposition, namedPath, needsTranscode, playableVideo, safeName } from "./files.ts";
 import {
 	type AnswerEvent,
 	buildPost,
@@ -301,6 +302,11 @@ export class DailiesServer {
 						201,
 						this.addAnswer(String(body.post), String(body.question), body.choices, body.text === undefined ? undefined : String(body.text), author(body.by)),
 					);
+				case "/api/path": {
+					const item = this.itemById(String(body.item));
+					if (!item) throw new HttpError(404, `no item ${body.item}`);
+					return sendJson(response, 200, { item: item.id, path: namedPath(this.store, item) });
+				}
 				case "/api/select":
 					return sendJson(response, 200, this.select(body.post ? String(body.post) : null, body.item ? String(body.item) : undefined));
 				case "/api/shutdown":
@@ -357,6 +363,35 @@ export class DailiesServer {
 			}
 		}
 
+		// /files/<item>/<name>: the file under its own name (inline, or ?download to save it).
+		const named = /^\/files\/(i_[a-z0-9]+)(?:\/[^/]*)?$/.exec(path);
+		if (named) {
+			const item = this.itemById(named[1]!);
+			if (!item) throw new HttpError(404, "no such file");
+			const kind = url.searchParams.has("download") ? "attachment" : "inline";
+			return sendFile(request, response, this.store.blobPath(item.sha256, item.ext), item.mime, "public, max-age=31536000, immutable", {
+				"content-disposition": disposition(kind, item.name),
+			});
+		}
+
+		// /play/<item>: a video the browser can play, converting it once if it cannot.
+		const play = /^\/play\/(i_[a-z0-9]+)$/.exec(path);
+		if (play) {
+			const item = this.itemById(play[1]!);
+			if (!item) throw new HttpError(404, "no such file");
+			if (!needsTranscode(item)) {
+				response.writeHead(302, { location: `/files/${item.id}/${encodeURIComponent(safeName(item.name))}` });
+				return void response.end();
+			}
+			let file: string;
+			try {
+				file = await playableVideo(this.store, item);
+			} catch (error) {
+				throw new HttpError(415, error instanceof Error ? error.message : String(error));
+			}
+			return sendFile(request, response, file, "video/webm", "public, max-age=31536000, immutable");
+		}
+
 		const blob = /^\/blob\/([0-9a-f]{64})(\.[a-z0-9]{1,8})?$/.exec(path);
 		if (blob) {
 			const sha = blob[1]!;
@@ -375,6 +410,10 @@ export class DailiesServer {
 			return sendFile(request, response, file, STATIC_TYPES[ext] ?? "application/octet-stream", "no-cache");
 		}
 		throw new HttpError(404, `no ${path}`);
+	}
+
+	private itemById(id: string): Item | undefined {
+		return this.catalog.postOfItem(id)?.items.find((item) => item.id === id);
 	}
 
 	private findItem(sha256: string, ext: string): Item | undefined {
@@ -448,14 +487,21 @@ function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 // Serves a file with Range support, which video players need to seek.
-function sendFile(request: IncomingMessage, response: ServerResponse, file: string, type: string, cache: string): void {
+function sendFile(
+	request: IncomingMessage,
+	response: ServerResponse,
+	file: string,
+	type: string,
+	cache: string,
+	extra: Record<string, string> = {},
+): void {
 	let size: number;
 	try {
 		size = statSync(file).size;
 	} catch {
 		throw new HttpError(404, "no such file");
 	}
-	const headers: Record<string, string | number> = { "content-type": type, "cache-control": cache, "accept-ranges": "bytes" };
+	const headers: Record<string, string | number> = { "content-type": type, "cache-control": cache, "accept-ranges": "bytes", ...extra };
 	const range = /^bytes=(\d*)-(\d*)$/.exec(String(request.headers.range ?? ""));
 	let start = 0;
 	let end = size - 1;

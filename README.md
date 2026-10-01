@@ -19,7 +19,9 @@ yesterday's renders and decides what to keep.
 
 - **One tab, live** — new posts slide in at the top (server-sent events); no
   windows pop up, nothing steals focus. The browser is opened only when no tab is.
-- **Every medium** — images and GIFs, video (looping, muted, plays when in view),
+- **Every medium** — images and GIFs, video (looping, muted, plays when in view;
+  formats browsers no longer play, such as Ogg Theora, are converted once with
+  [ffmpeg](https://ffmpeg.org/) if it is installed),
   audio, GLB/glTF (orbit with [model-viewer](https://modelviewer.dev/)), PDF,
   HTML, Markdown and text.
 - **Grouped by worktree** — posts carry the repository, worktree/branch, the
@@ -31,10 +33,15 @@ yesterday's renders and decides what to keep.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
   next message.
+- **Take files with you** — copy an image straight to the clipboard and paste it
+  anywhere; copy a video's or model's path to paste into an upload dialog;
+  download one file or the whole post under the original names; drag a file to the
+  desktop or a folder.
 - **Kept** — files are stored by content hash outside your repository, so they
   survive worktree cleanup and never bloat git.
 - **Keyboard first** — `j`/`k` posts, `h`/`l` files, `a` adopt, `x` reject,
-  `c` comment, `f` full screen, `1`–`9` choose an option, `Enter` send it.
+  `c` comment, `f` full screen, `1`–`9` choose an option, `Enter` send it,
+  `y` copy (`Y` the path), `d` download.
 
 ## Install
 
@@ -131,12 +138,25 @@ it has been handed over once:
 4. **In a new session** — the SessionStart hook passes on feedback left in this
    worktree that no session read.
 
+### Getting files out
+
+| On the page | What you get |
+| --- | --- |
+| ⧉ copy (`y`) | Still images: the picture itself (as PNG) — paste into chat, issues, posts. Text files: the text. Video, audio, GIFs, models: the file's path, because a web page cannot put those on the clipboard as files; in an upload dialog press `Ctrl+L` and paste. Shift-click (`Y`) always copies the path. |
+| ⤓ download (`d`), ⤓ All | The file, or every file in the post, saved under the original names. From Chrome's download bubble you can drag them on into another site. |
+| Drag a file name (or an image) | Dropped on the desktop or in a folder, the file itself; dropped on another page, images arrive as images and other files as their link. |
+
+Paths point to `named/<item>/<original name>` in the store, a hard link to the
+stored copy, so the name is right and no space is used.
+
 ## Where things are kept
 
 ```text
 $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
   blobs/<ab>/<sha256><ext>           files, once per content
   log/<machine>.jsonl                append-only events: post (with its questions), verdict, comment, answer
+  named/<item>/<original name>       hard links under the original names (copy path)
+  derived/<sha256>.webm              videos converted for the browser
   sessions/<session>.json            what each agent session has been handed
   selection.json                     what is selected in the viewer
   server.log
