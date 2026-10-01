@@ -125,24 +125,42 @@ export function preToolUse(input: unknown): HookDecision {
 }
 
 export function guideText(): string {
-	return `agent-dailies is installed: the user reviews what you make in one browser tab
-(the viewer) instead of opening files one by one. Whenever you want the user to
-look at an image, video, GIF, audio clip, 3D model (GLB/glTF), PDF or other file:
+	return `agent-dailies is installed: the user reviews your work in one browser tab (the
+viewer) and answers your questions there. Use it for your work in progress instead
+of opening files in windows, leaving the user file paths, or publishing an Artifact.
 
-- Run \`agent-dailies show <file>… --title "<what to look at>" [--note "<what changed>"]\`.
-  It copies the files into the store and puts them at the top of the viewer;
-  it opens the viewer in the browser only when no viewer is open. Don't also
-  open the files in a window, and don't leave the user only a file path.
-- Show alternatives in one call (\`show a.png b.png --title "Option A / B"\`) so they
-  sit side by side. Keep titles short; say what to compare.
+Show — whenever you want the user to look at an image, video, GIF, audio clip,
+3D model (GLB/glTF), PDF, HTML or text file:
+- \`agent-dailies show <file>… --title "<what to look at>" [--note "<what changed>"]\`.
+  It stores the files and puts them at the top of the viewer; the browser opens
+  only when no viewer tab is. Put alternatives in one call so they sit side by side.
+
+Ask — whenever you need the user to decide (pick an option, approve a design,
+choose what to keep), ask in the viewer rather than listing options in chat:
+- \`agent-dailies ask "<question>" a.png b.png --option "Neither — redo it" --why "<your recommendation and why>"\`
+  Files and --option texts become options A, B, C… (--multi lets them pick several);
+  they can add a note.
+- Several decisions at once (a design review): write a JSON sheet
+  {"title": "…", "questions": [{"text": "…", "why": "…", "options": ["OK as proposed",
+  {"label": "Alternative: …", "body": "…"}, "Let's discuss"]}]} — options may carry
+  "files" — and run \`agent-dailies ask --file sheet.json\`.
+- Then start \`agent-dailies wait <post-id>\` in the background (Bash with
+  run_in_background, timeout 7200000). It exits with the answers once every question
+  is answered (or the user comments), which wakes you. Act on them.
+
+Which to use:
+- your work in progress to look at or decide on → agent-dailies (show / ask)
+- a page others will read, or that should outlive this work (a report, a shared
+  document) → an Artifact
+- a quick choice that needs no picture or reasoning to look at → ask in the terminal
+
+Hear back:
 - When the user says "this", "the left one", "これ", "左の", "今見てるやつ" about
-  something you showed, run \`agent-dailies context\` first: it prints the post and
-  the file they selected (with a path you can read), its mark and comments.
-- After showing something you want a reaction to, keep \`agent-dailies watch\`
-  running in the background (Bash with run_in_background, timeout 7200000). It
-  exits when the user writes a comment in the viewer, which wakes you up with the
-  comment; act on it, then start it again. One per session is enough.
-- \`agent-dailies feedback\` lists what they adopted, rejected or commented on.
-- Posts are grouped by repository and worktree automatically; the issue comes
-  from the branch name (override with --issue).`;
+  something in the viewer, run \`agent-dailies context\` first: the post and file they
+  selected (with a path you can read), marks, comments and answers.
+- After showing something you want a reaction to, keep \`agent-dailies watch\` running
+  in the background (run_in_background, timeout 7200000): it exits when the user
+  comments or answers, waking you. Start it again after acting. One per session.
+- \`agent-dailies feedback\` lists what they adopted, rejected, commented and answered.
+- Posts are grouped by repository and worktree; the issue comes from the branch name.`;
 }

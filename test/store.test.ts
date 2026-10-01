@@ -115,3 +115,33 @@ test("posts list newest first, page by id, and filter by lane and issue", async 
 test("a post needs files", () => {
 	assert.throws(() => buildPost({ project: "p", lane: "l", items: [] }, "m"), /at least one item/);
 });
+
+test("a post can ask questions about its files, and the latest answer counts", async () => {
+	const dir = tempDir();
+	const store = new Store(join(dir, "home"), "m");
+	const item = await store.addFile(writeFile(dir, "a.png", PNG));
+	const question = {
+		id: "q1",
+		text: "Keep it?",
+		items: [],
+		options: [
+			{ id: "o1", key: "A", items: [item.id] },
+			{ id: "o2", key: "B", label: "Redo it", items: [] },
+		],
+	};
+	assert.throws(() => buildPost({ project: "p", lane: "l", items: [], questions: [{ ...question, options: [{ id: "o1", key: "A", items: ["i_nope"] }] }] }, "m"), /unknown item/);
+	assert.throws(() => buildPost({ project: "p", lane: "l", items: [item], questions: [question, question] }, "m"), /own id/);
+	const textOnly = buildPost({ project: "p", lane: "l", items: [], questions: [{ ...question, options: [{ id: "o1", key: "A", label: "Yes", items: [] }] }] }, "m");
+	assert.equal(textOnly.items.length, 0);
+
+	const post = buildPost({ project: "p", lane: "l", items: [item], questions: [question] }, "m", new Date("2026-10-01T00:00:00Z"));
+	store.append(post);
+	assert.deepEqual(store.load().openQuestions(post).map((open) => open.id), ["q1"]);
+	const answer = (at: string, choices: string[], text?: string) => ({ type: "answer" as const, id: `a_${at}`, at, machine: "m", post: post.id, question: "q1", choices, text, by: "human" as const });
+	store.append(answer("2026-10-01T00:02:00Z", ["o2"], "darker"));
+	store.append(answer("2026-10-01T00:01:00Z", ["o1"]));
+	const catalog = store.load();
+	assert.deepEqual(catalog.openQuestions(post), []);
+	assert.deepEqual(catalog.view(post).answers.q1?.choices, ["o2"]);
+	assert.equal(catalog.view(post).answers.q1?.text, "darker");
+});

@@ -1,7 +1,7 @@
 {
   "name": "agent-dailies",
-  "version": "0.1.0",
-  "description": "Show what the agent makes in one live browser tab instead of opening windows, and bring the user's marks and comments back to the agent",
+  "version": "0.2.0",
+  "description": "Show what the agent makes in one live browser tab, ask you to decide there, and bring your marks, answers and comments back to the agent",
   "author": {
     "name": "k1-c"
   },

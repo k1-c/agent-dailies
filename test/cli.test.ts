@@ -62,6 +62,63 @@ test("show starts the viewer, and a comment wakes watch", async () => {
 	assert.match(context.stdout, /make it bigger/);
 });
 
+test("ask posts a question, and wait exits with the answer", async () => {
+	const image = writeFile(dir, "option.png", PNG);
+	const asked = await run(["ask", "Keep this one?", image, "--option", "No, redo it", "--json"]);
+	assert.equal(asked.code, 0, asked.stderr);
+	const { post, url } = JSON.parse(asked.stdout) as { post: { id: string; title: string; questions: { options: { id: string; key: string; label?: string }[] }[] }; url: string };
+	assert.equal(post.title, "Keep this one?");
+	assert.deepEqual(
+		post.questions[0]!.options.map((option) => [option.key, option.label ?? null]),
+		[
+			["A", null],
+			["B", "No, redo it"],
+		],
+	);
+
+	const waiter = spawn(process.execPath, [CLI, "wait", post.id, "--timeout", "60s"], { env, cwd: dir });
+	let output = "";
+	waiter.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+	const exited = new Promise<number>((resolve) => waiter.on("exit", (code) => resolve(code ?? -1)));
+	const base = new URL(url).origin;
+	for (let tries = 0; tries < 50; tries++) {
+		const { watching } = (await (await fetch(`${base}/api/watchers?session=none&post=${post.id}`)).json()) as { watching: number };
+		if (watching) break;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	await fetch(`${base}/api/answers`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ post: post.id, question: "q1", choices: [post.questions[0]!.options[1]!.id], text: "too dark", by: "human" }),
+	});
+	assert.equal(await exited, 0);
+	assert.match(output, /answered: B \(No, redo it\) — "too dark"/);
+});
+
+test("ask --file takes a review sheet with files relative to it", async () => {
+	writeFile(dir, "sketch.png", PNG);
+	const sheet = writeFile(
+		dir,
+		"sheet.json",
+		JSON.stringify({
+			title: "Review",
+			questions: [
+				{ text: "Layout", why: "**why**", files: ["sketch.png"], options: ["OK", { label: "Alternative", body: "- shorter" }, "Discuss"] },
+				{ text: "Colors", multi: true, options: ["Red", "Blue"] },
+			],
+		}),
+	);
+	const asked = await run(["ask", "--file", sheet, "--json", "--no-open"]);
+	assert.equal(asked.code, 0, asked.stderr);
+	const { post } = JSON.parse(asked.stdout) as { post: { title: string; items: unknown[]; questions: { id: string; multi?: boolean; items: string[] }[] } };
+	assert.equal(post.title, "Review");
+	assert.equal(post.items.length, 1);
+	assert.deepEqual(post.questions.map((question) => [question.id, question.items.length, Boolean(question.multi)]), [
+		["q1", 1, false],
+		["q2", 0, true],
+	]);
+});
+
 test("the launcher runs the sources with no install", async () => {
 	const launcher = fileURLToPath(new URL("../bin/agent-dailies", import.meta.url));
 	const { stdout } = await promisify(execFile)("sh", [launcher, "--version"], { env });

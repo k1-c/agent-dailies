@@ -1,7 +1,8 @@
 // Getting the user's feedback back to the agent session that asked for it.
 //
 // Every post remembers the agent session that showed it. A comment the user
-// writes on a post is "for" that session, and stays pending until it has been
+// writes on a post, or an answer to a question the post asks, is "for" that
+// session, and stays pending until it has been
 // handed to the session once: by `agent-dailies watch` (which an agent leaves
 // running in the background, so a comment wakes it up), by the Stop hook (so an
 // agent about to stop reads it first), or by the UserPromptSubmit hook (so it
@@ -10,9 +11,9 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Catalog, CommentEvent, PostEvent, Store, VerdictEvent } from "./store.ts";
+import type { AnswerEvent, Catalog, CommentEvent, PostEvent, Store, VerdictEvent } from "./store.ts";
 
-export type Feedback = VerdictEvent | CommentEvent;
+export type Feedback = VerdictEvent | CommentEvent | AnswerEvent;
 
 function sessionFile(store: Store, session: string): string {
 	return join(store.home, "sessions", `${session.replace(/[^A-Za-z0-9._-]/g, "_")}.json`);
@@ -53,8 +54,9 @@ export function pendingFor(catalog: Catalog, store: Store, session: string): Fee
 	return catalog.history.filter((event) => event.by === "human" && event.at > since && catalog.post(event.post)?.session === session);
 }
 
-export function hasComment(events: Feedback[]): boolean {
-	return events.some((event) => event.type === "comment");
+/** Whether the user said something (a comment or an answer), not only marked files. */
+export function hasMessage(events: Feedback[]): boolean {
+	return events.some((event) => event.type === "comment" || event.type === "answer");
 }
 
 export function postedBy(catalog: Catalog, session: string, withinMs?: number): PostEvent[] {
@@ -74,10 +76,28 @@ export function orphanedIn(catalog: Catalog, store: Store, project: string, lane
 	});
 }
 
+export function describeAnswer(catalog: Catalog, event: AnswerEvent): string {
+	const post = catalog.post(event.post);
+	const question = post?.questions?.find((candidate) => candidate.id === event.question);
+	const chosen = event.choices.map((id) => {
+		const option = question?.options.find((candidate) => candidate.id === id);
+		if (!option) return id;
+		const names = option.items.map((item) => post?.items.find((candidate) => candidate.id === item)?.name).filter(Boolean);
+		const label = option.label ?? names.join(", ");
+		return label ? `${option.key} (${label})` : option.key;
+	});
+	const said = [chosen.length ? chosen.join(" + ") : "", event.text ? `"${event.text}"` : ""].filter(Boolean).join(" — ");
+	return `${question ? `"${question.text}"` : event.question} → ${said || "(no choice)"}`;
+}
+
 export function describeFeedback(catalog: Catalog, events: Feedback[]): string[] {
 	const lines: string[] = [];
 	for (const event of events) {
 		const post = catalog.post(event.post);
+		if (event.type === "answer") {
+			lines.push(`- Answered in ${post ? `"${post.title ?? "a question"}" (${post.id})` : event.post}: ${describeAnswer(catalog, event)}`);
+			continue;
+		}
 		const item = event.item ? post?.items.find((candidate) => candidate.id === event.item) : undefined;
 		const where = post ? `"${post.title ?? post.items.map((entry) => entry.name).join(", ")}" (${post.id})` : event.post;
 		const about = item ? `${item.name} (${item.id}) in ${where}` : where;

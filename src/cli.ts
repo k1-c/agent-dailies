@@ -6,17 +6,19 @@ import { dirname, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import * as config from "./config.ts";
 import { baseUrl, Client, ensureServer, openBrowser } from "./client.ts";
-import { describeFeedback, hasComment, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
+import { describeAnswer, describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
 import { guideText, preToolUse } from "./hook.ts";
 import { DailiesServer, type Context } from "./server.ts";
 import {
 	buildPost,
 	Store,
+	type AnswerEvent,
 	type Catalog,
 	type CommentEvent,
 	type Item,
 	type PostInput,
 	type PostView,
+	type Question,
 	type Selection,
 	type VerdictEvent,
 } from "./store.ts";
@@ -28,6 +30,12 @@ Usage:
   agent-dailies show <file>… [--title T] [--note N] [--tag X]… [--issue ID] [--lane L] [--no-open] [--json]
       Put files at the top of the viewer (images, videos, audio, GLB, PDF, text…).
       Starts the viewer if needed; opens the browser only when no viewer tab is open.
+  agent-dailies ask "<question>" [file…] [--option TEXT]… [--why TEXT] [--multi] [--wait] [--json]
+  agent-dailies ask --file questions.json [--wait] [--json]
+      Ask the user to decide: files and/or sentences become options A, B, C… they pick from in
+      the viewer. --file takes several questions (a review sheet). --wait blocks until answered.
+  agent-dailies wait <post-id> [--timeout 110m]
+                                      Wait until a question post is answered (run it in the background)
   agent-dailies context [--json]      What the user selected in the viewer (or the newest post)
   agent-dailies feedback [--since 2h|ISO] [--all] [--json]
                                       The user's marks and comments, for this worktree (or --all)
@@ -107,26 +115,28 @@ function since(value: string | undefined, fallbackMs: number): string {
 	return new Date(parsed).toISOString();
 }
 
-async function show(args: string[]): Promise<void> {
-	const { values, positionals } = parse(args, {
-		title: { type: "string", short: "t" },
-		note: { type: "string", short: "n" },
-		tag: { type: "string", multiple: true },
-		issue: { type: "string" },
-		lane: { type: "string" },
-		project: { type: "string" },
-		"no-open": { type: "boolean" },
-		json: { type: "boolean" },
-	});
-	if (values.help || positionals.length === 0) return out("Usage: agent-dailies show <file>… [--title T] [--note N] [--tag X]… [--issue ID] [--no-open] [--json]");
-	const missing = positionals.filter((file) => !existsSync(file));
-	if (missing.length) throw new Error(`no such file: ${missing.join(", ")}`);
+interface Published {
+	post: PostView;
+	url: string;
+	viewers: number;
+	live: boolean;
+	opened: boolean;
+}
 
-	const target = store();
-	const items: Item[] = [];
-	for (const file of positionals) items.push(await target.addFile(resolve(file)));
+const WHERE_OPTIONS = {
+	title: { type: "string", short: "t" },
+	note: { type: "string", short: "n" },
+	tag: { type: "string", multiple: true },
+	issue: { type: "string" },
+	lane: { type: "string" },
+	project: { type: "string" },
+	"no-open": { type: "boolean" },
+	json: { type: "boolean" },
+} as const;
+
+function postInput(values: Values, items: Item[], extra: Partial<PostInput> = {}): PostInput {
 	const where = detectWhere();
-	const input: PostInput = {
+	return {
 		...where,
 		project: (values.project as string | undefined) ?? where.project,
 		lane: (values.lane as string | undefined) ?? where.lane,
@@ -135,8 +145,13 @@ async function show(args: string[]): Promise<void> {
 		note: values.note as string | undefined,
 		tags: (values.tag as string[] | undefined) ?? [],
 		items,
+		...extra,
 	};
+}
 
+// Hands a post to the viewer (starting it if needed) and opens the browser
+// when no tab is open. Keeps the post even when the viewer cannot run.
+async function publish(target: Store, input: PostInput, values: Values): Promise<Published> {
 	let post: PostView;
 	let url: string;
 	let viewers = 0;
@@ -148,27 +163,232 @@ async function show(args: string[]): Promise<void> {
 		url = result.url;
 		viewers = result.viewers;
 	} catch (error) {
-		// Keep the post even when the viewer cannot run; it shows up once it does.
 		const event = buildPost(input, target.machine);
 		target.append(event);
-		post = { ...event, items: event.items.map((item) => ({ ...item, verdict: null })), comments: [] };
+		post = { ...event, items: event.items.map((item) => ({ ...item, verdict: null })), comments: [], answers: {} };
 		url = `${baseUrl(config.host(), config.port())}#${post.id}`;
 		live = false;
 		process.stderr.write(`agent-dailies: the viewer is not running (${error instanceof Error ? error.message : error}); the post is saved.\n`);
 	}
-	const shouldOpen = live && viewers === 0 && !values["no-open"] && process.env.AGENT_DAILIES_NO_OPEN !== "1";
-	if (shouldOpen) openBrowser(url);
+	const opened = live && viewers === 0 && !values["no-open"] && process.env.AGENT_DAILIES_NO_OPEN !== "1";
+	if (opened) openBrowser(url);
+	return { post, url, viewers, live, opened };
+}
 
-	if (values.json) return out(JSON.stringify({ post, url, viewers, opened: shouldOpen }, null, 2));
-	const lines = [`Shown ${items.length === 1 ? "1 file" : `${items.length} files`} in the viewer: ${url}`];
-	post.items.forEach((item, index) => lines.push(`  ${index + 1}. ${item.name}  (${item.id})`));
-	if (!live) lines.push("The viewer is not running, so nobody sees it yet.");
-	else if (shouldOpen) lines.push("No viewer tab was open, so it was opened in the browser.");
-	else if (viewers > 0) lines.push(`The viewer is open in ${viewers === 1 ? "1 tab" : `${viewers} tabs`}; it updated in place. No need to open anything.`);
-	if (live && where.session) {
+function viewerLine(published: Published): string | undefined {
+	if (!published.live) return "The viewer is not running, so nobody sees it yet.";
+	if (published.opened) return "No viewer tab was open, so it was opened in the browser.";
+	if (published.viewers > 0) {
+		return `The viewer is open in ${published.viewers === 1 ? "1 tab" : `${published.viewers} tabs`}; it updated in place. No need to open anything.`;
+	}
+	return undefined;
+}
+
+async function show(args: string[]): Promise<void> {
+	const { values, positionals } = parse(args, WHERE_OPTIONS);
+	if (values.help || positionals.length === 0) return out("Usage: agent-dailies show <file>… [--title T] [--note N] [--tag X]… [--issue ID] [--no-open] [--json]");
+	const missing = positionals.filter((file) => !existsSync(file));
+	if (missing.length) throw new Error(`no such file: ${missing.join(", ")}`);
+
+	const target = store();
+	const items: Item[] = [];
+	for (const file of positionals) items.push(await target.addFile(resolve(file)));
+	const input = postInput(values, items);
+	const published = await publish(target, input, values);
+
+	if (values.json) return out(JSON.stringify({ post: published.post, url: published.url, viewers: published.viewers, opened: published.opened }, null, 2));
+	const lines = [`Shown ${items.length === 1 ? "1 file" : `${items.length} files`} in the viewer: ${published.url}`];
+	published.post.items.forEach((item, index) => lines.push(`  ${index + 1}. ${item.name}  (${item.id})`));
+	const viewerState = viewerLine(published);
+	if (viewerState) lines.push(viewerState);
+	if (published.live && input.session) {
 		lines.push("To hear the user's comments on it, keep `agent-dailies watch` running in the background (it exits, waking you, when they comment).");
 	}
 	out(lines.join("\n"));
+}
+
+const KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+interface AskSpec {
+	title?: string;
+	note?: string;
+	tags?: string[];
+	questions: {
+		id?: string;
+		text: string;
+		why?: string;
+		multi?: boolean;
+		files?: string[];
+		options: (string | { label?: string; body?: string; files?: string[] })[];
+	}[];
+}
+
+// Turns a question spec (from the command line or a JSON file) into items and
+// questions, storing every file it names.
+async function buildQuestions(target: Store, spec: AskSpec, base: string): Promise<{ items: Item[]; questions: Question[] }> {
+	if (!Array.isArray(spec.questions) || !spec.questions.length) throw new Error("no questions to ask");
+	const items: Item[] = [];
+	const add = async (files: string[] | undefined): Promise<string[]> => {
+		const ids: string[] = [];
+		for (const file of files ?? []) {
+			const path = resolve(base, file);
+			if (!existsSync(path)) throw new Error(`no such file: ${file}`);
+			const item = await target.addFile(path);
+			items.push(item);
+			ids.push(item.id);
+		}
+		return ids;
+	};
+	const questions: Question[] = [];
+	for (const [index, entry] of spec.questions.entries()) {
+		if (!entry || !String(entry.text ?? "").trim()) throw new Error(`question ${index + 1} has no text`);
+		if (!Array.isArray(entry.options) || entry.options.length < 1) throw new Error(`question ${index + 1} has no options`);
+		const question: Question = {
+			id: entry.id ? String(entry.id) : `q${index + 1}`,
+			text: String(entry.text).trim(),
+			why: entry.why ? String(entry.why) : undefined,
+			multi: entry.multi ? true : undefined,
+			items: await add(entry.files),
+			options: [],
+		};
+		for (const [optionIndex, raw] of entry.options.entries()) {
+			const option = typeof raw === "string" ? { label: raw } : raw;
+			question.options.push({
+				id: `o${optionIndex + 1}`,
+				key: KEYS[optionIndex] ?? String(optionIndex + 1),
+				label: option.label ? String(option.label) : undefined,
+				body: option.body ? String(option.body) : undefined,
+				items: await add(option.files),
+			});
+		}
+		questions.push(question);
+	}
+	return { items, questions };
+}
+
+async function ask(args: string[]): Promise<void> {
+	const { values, positionals } = parse(args, {
+		...WHERE_OPTIONS,
+		option: { type: "string", short: "o", multiple: true },
+		why: { type: "string" },
+		multi: { type: "boolean" },
+		file: { type: "string", short: "f" },
+		wait: { type: "boolean" },
+		timeout: { type: "string" },
+	});
+	if (values.help || (!values.file && positionals.length === 0)) {
+		return out(
+			[
+				'Usage: agent-dailies ask "<question>" [file…] [--option TEXT]… [--why TEXT] [--multi] [--title T] [--wait] [--json]',
+				"       agent-dailies ask --file questions.json [--wait] [--json]",
+				"Each file after the question becomes an option (A, B, C…), then each --option. The user picks in the viewer.",
+			].join("\n"),
+		);
+	}
+	const target = store();
+	let spec: AskSpec;
+	let base = process.cwd();
+	if (values.file) {
+		const path = resolve(values.file as string);
+		spec = JSON.parse(readFileSync(path, "utf8")) as AskSpec;
+		base = dirname(path);
+	} else {
+		const [text, ...files] = positionals;
+		spec = {
+			questions: [
+				{
+					text: text!,
+					why: values.why as string | undefined,
+					multi: Boolean(values.multi),
+					options: [...files.map((file) => ({ files: [file] })), ...((values.option as string[] | undefined) ?? [])],
+				},
+			],
+		};
+	}
+	const { items, questions } = await buildQuestions(target, spec, base);
+	const input = postInput(values, items, {
+		title: (values.title as string | undefined) ?? spec.title ?? (questions.length === 1 ? questions[0]!.text : undefined),
+		note: (values.note as string | undefined) ?? spec.note,
+		tags: [...((values.tag as string[] | undefined) ?? []), ...(spec.tags ?? [])],
+		questions,
+	});
+	const published = await publish(target, input, values);
+
+	if (!values.wait) {
+		if (values.json) return out(JSON.stringify({ post: published.post, url: published.url, viewers: published.viewers, opened: published.opened }, null, 2));
+		const lines = [`Asked in the viewer: ${published.url}`, ...describeQuestions(published.post)];
+		const viewerState = viewerLine(published);
+		if (viewerState) lines.push(viewerState);
+		if (published.live) {
+			lines.push(
+				`To get the answer, run \`agent-dailies wait ${published.post.id}\` in the background (it exits, waking you, when the user answers), or keep \`agent-dailies watch\` running.`,
+			);
+		}
+		return out(lines.join("\n"));
+	}
+	if (!values.json) process.stdout.write(`Asked in the viewer: ${published.url}\nWaiting for the answer…\n`);
+	await waitForAnswers(target, published.post.id, values);
+}
+
+function describeQuestions(post: PostView): string[] {
+	const lines: string[] = [];
+	const names = new Map(post.items.map((item) => [item.id, item.name]));
+	for (const question of post.questions ?? []) {
+		lines.push(`- ${question.text}${question.multi ? " (more than one may be chosen)" : ""}  [${question.id}]`);
+		for (const option of question.options) {
+			const files = option.items.map((id) => names.get(id)).filter(Boolean).join(", ");
+			lines.push(`    ${option.key}. ${[option.label, files].filter(Boolean).join(" — ")}`);
+		}
+		const answer = post.answers[question.id];
+		if (answer) lines.push(`    → answered: ${answerText(question, answer, names)}`);
+	}
+	return lines;
+}
+
+function answerText(question: Question, answer: AnswerEvent, names: Map<string, string>): string {
+	const chosen = answer.choices.map((id) => {
+		const option = question.options.find((candidate) => candidate.id === id);
+		if (!option) return id;
+		const label = option.label ?? option.items.map((item) => names.get(item)).filter(Boolean).join(", ");
+		return `${option.key}${label ? ` (${label})` : ""}`;
+	});
+	return [chosen.join(" + "), answer.text ? `"${answer.text}"` : ""].filter(Boolean).join(" — ") || "(nothing)";
+}
+
+// Waits until every question of a post has an answer, or the user comments on
+// it, then prints what they said and exits.
+async function waitForAnswers(target: Store, postId: string, values: Values): Promise<void> {
+	const started = new Date().toISOString();
+	const check = async (): Promise<void> => {
+		const catalog = target.load();
+		const post = catalog.post(postId);
+		if (!post) throw new Error(`no post ${postId}`);
+		const comments = catalog.history.filter((event) => event.type === "comment" && event.post === postId && event.by === "human" && event.at > started);
+		if (catalog.openQuestions(post).length && !comments.length) return;
+		const view = catalog.view(post);
+		if (post.session) markDelivered(target, post.session, pendingFor(catalog, target, post.session).filter((event) => event.post === postId));
+		await finish(
+			values.json
+				? JSON.stringify({ post: postId, questions: post.questions, answers: view.answers, comments }, null, 2)
+				: [
+						`The user answered in agent-dailies (${post.title ?? postId}):`,
+						...describeQuestions(view),
+						...describeFeedback(catalog, comments),
+					].join("\n"),
+		);
+	};
+	await check();
+	await streamUntil(`api/watch?post=${encodeURIComponent(postId)}`, target, values, check);
+	await finish(`No answer in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Run \`agent-dailies wait ${postId}\` again to keep waiting.`);
+}
+
+async function wait(args: string[]): Promise<void> {
+	const { values, positionals } = parse(args, { timeout: { type: "string" }, json: { type: "boolean" } });
+	const postId = positionals[0];
+	if (!postId) throw new Error("Usage: agent-dailies wait <post-id> [--timeout 110m] [--json]");
+	const target = store();
+	if (!target.load().post(postId)) throw new Error(`no post ${postId}`);
+	await waitForAnswers(target, postId, values);
 }
 
 // Reads the context from the running viewer, or from the store when it is down.
@@ -229,6 +449,9 @@ async function context(args: string[]): Promise<void> {
 		lines.push(`${index + 1}. ${item.name} (${item.id})${selected}${verdict}`);
 		lines.push(`   ${target.blobPath(item.sha256, item.ext)}`);
 	});
+	if (ctx.post.questions?.length) {
+		lines.push("", "## Questions", ...describeQuestions(ctx.post));
+	}
 	if (ctx.post.comments.length) {
 		lines.push("", "## Comments");
 		const names = new Map(ctx.post.items.map((item) => [item.id, item.name]));
@@ -257,13 +480,14 @@ async function feedback(args: string[]): Promise<void> {
 	});
 	if (values.json) return out(JSON.stringify({ since: from, history: entries }, null, 2));
 	const scope = values.all ? "all worktrees" : `${where.project} › ${where.lane}`;
-	if (!entries.length) return out(`No marks or comments from the user since ${from} (${scope}).`);
+	if (!entries.length) return out(`No marks, comments or answers from the user since ${from} (${scope}).`);
 	const lines = [`# The user's feedback (${scope}, since ${from})`, ""];
 	for (const event of [...entries].reverse()) {
 		const post = catalog.post(event.post);
 		const item = post?.items.find((candidate) => candidate.id === (event as VerdictEvent | CommentEvent).item);
 		const about = `${item ? `${item.name} (${item.id}) in ` : ""}${post ? describePost(catalog.view(post)) : event.post}`;
 		if (event.type === "verdict") lines.push(`- ${ago(event.at)}: ${event.verdict ?? "cleared the mark on"} ${about}`);
+		else if (event.type === "answer") lines.push(`- ${ago(event.at)}: answered in ${about}: ${describeAnswer(catalog, event)}`);
 		else lines.push(`- ${ago(event.at)}: commented on ${about}: ${event.text}`);
 	}
 	out(lines.join("\n"));
@@ -322,36 +546,20 @@ function duration(value: string | undefined, fallbackMs: number): number {
 
 const WATCH_AGAIN = "When you have dealt with it, start `agent-dailies watch` in the background again to hear the next comment.";
 
-async function watch(args: string[]): Promise<void> {
-	const { values } = parse(args, { session: { type: "string" }, timeout: { type: "string" }, json: { type: "boolean" } });
-	const session = sessionOf(values.session);
-	if (!session) throw new Error("no agent session (CLAUDE_CODE_SESSION_ID); pass --session ID");
-	const target = store();
-	const timeoutMs = duration(values.timeout as string | undefined, 110 * 60_000);
-
-	const deliver = async (): Promise<void> => {
-		const catalog = target.load();
-		const pending = pendingFor(catalog, target, session);
-		if (!hasComment(pending)) return;
-		markDelivered(target, session, pending);
-		await finish(
-			values.json
-				? JSON.stringify({ session, feedback: pending }, null, 2)
-				: ["The user left feedback in agent-dailies:", ...describeFeedback(catalog, pending), "", WATCH_AGAIN].join("\n"),
-		);
-	};
-	await deliver();
-
-	const deadline = Date.now() + timeoutMs;
-	const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
-	const { watching } = await viewer.get<{ watching: number }>(`api/watchers?session=${encodeURIComponent(session)}`);
-	if (watching > 0) await finish("Already watching for this session in another process; nothing else to start.");
-
+// Listens on a watch stream until `check` finishes the process or time runs out.
+// The stream says something happened; `check` reads the store to decide.
+async function streamUntil(path: string, target: Store, values: Values, check: () => Promise<void>): Promise<void> {
+	const deadline = Date.now() + duration(values.timeout as string | undefined, 110 * 60_000);
 	while (Date.now() < deadline) {
+		const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home }).catch(() => undefined);
+		if (!viewer) {
+			await new Promise((done) => setTimeout(done, 2000));
+			continue;
+		}
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), deadline - Date.now());
 		try {
-			const response = await fetch(new URL(`api/watch?session=${encodeURIComponent(session)}`, viewer.base), { signal: controller.signal });
+			const response = await fetch(new URL(path, viewer.base), { signal: controller.signal });
 			if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
 			const decoder = new TextDecoder();
 			let buffer = "";
@@ -361,24 +569,44 @@ async function watch(args: string[]): Promise<void> {
 					buffer = buffer.slice(-64);
 					continue;
 				}
-				// Comments often come in a burst; give the rest a moment to land.
-				await new Promise((done) => setTimeout(done, 2000));
-				await deliver();
 				buffer = "";
+				// People often answer and then add a line; give the rest a moment to land.
+				await new Promise((done) => setTimeout(done, 2000));
+				await check();
 			}
-		} catch (error) {
-			if (controller.signal.aborted && Date.now() >= deadline) break;
-			void error;
+		} catch {
+			// The stream ended: the viewer went away (an upgrade, a restart) or time ran out.
 		} finally {
 			clearTimeout(timer);
 		}
-		// The viewer went away (an upgrade, a restart): bring it back and keep waiting.
-		if (Date.now() < deadline) {
-			await new Promise((done) => setTimeout(done, 1000));
-			await ensureServer({ host: config.host(), port: config.port(), home: target.home }).catch(() => undefined);
-		}
+		if (Date.now() < deadline) await new Promise((done) => setTimeout(done, 1000));
 	}
-	await finish(`No comments in ${Math.round(timeoutMs / 60_000)} min. Start \`agent-dailies watch\` in the background again if you still want to hear them.`);
+}
+
+async function watch(args: string[]): Promise<void> {
+	const { values } = parse(args, { session: { type: "string" }, timeout: { type: "string" }, json: { type: "boolean" } });
+	const session = sessionOf(values.session);
+	if (!session) throw new Error("no agent session (CLAUDE_CODE_SESSION_ID); pass --session ID");
+	const target = store();
+
+	const deliver = async (): Promise<void> => {
+		const catalog = target.load();
+		const pending = pendingFor(catalog, target, session);
+		if (!hasMessage(pending)) return;
+		markDelivered(target, session, pending);
+		await finish(
+			values.json
+				? JSON.stringify({ session, feedback: pending }, null, 2)
+				: ["The user left feedback in agent-dailies:", ...describeFeedback(catalog, pending), "", WATCH_AGAIN].join("\n"),
+		);
+	};
+	await deliver();
+
+	const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
+	const { watching } = await viewer.get<{ watching: number }>(`api/watchers?session=${encodeURIComponent(session)}`);
+	if (watching > 0) await finish("Already watching for this session in another process; nothing else to start.");
+	await streamUntil(`api/watch?session=${encodeURIComponent(session)}`, target, values, deliver);
+	await finish(`No comments in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Start \`agent-dailies watch\` in the background again if you still want to hear them.`);
 }
 
 async function status(args: string[]): Promise<void> {
@@ -512,7 +740,7 @@ async function hook(args: string[]): Promise<void> {
 			const shown = postedBy(catalog, session);
 			if (!shown.length) return;
 			const pending = pendingFor(catalog, target, session);
-			if (hasComment(pending)) {
+			if (hasMessage(pending)) {
 				markDelivered(target, session, pending);
 				process.stderr.write(`${["The user commented in agent-dailies while you were working:", ...describeFeedback(catalog, pending)].join("\n")}\n`);
 				process.exitCode = 2;
@@ -524,12 +752,18 @@ async function hook(args: string[]): Promise<void> {
 			const viewer = client();
 			const health = await viewer.health();
 			if (!health || health.home !== target.home) return;
-			const { watching } = await viewer.get<{ watching: number }>(`api/watchers?session=${encodeURIComponent(session)}`);
+			const { watching } = await viewer.get<{ watching: number }>(
+				`api/watchers?session=${encodeURIComponent(session)}&post=${encodeURIComponent(latest.id)}`,
+			);
 			writeSession(target, session, { reminded: latest.id });
 			if (watching > 0) return;
+			const asking = catalog.openQuestions(latest).length > 0;
 			process.stderr.write(
-				"You showed the user something in agent-dailies and nothing is listening for their comments. " +
-					"Start `agent-dailies watch` with run_in_background (timeout 7200000) so a comment wakes you, then finish.\n",
+				asking
+					? `You asked the user something in agent-dailies (${latest.id}) and nothing is waiting for the answer. ` +
+							`Start \`agent-dailies wait ${latest.id}\` with run_in_background (timeout 7200000) so the answer wakes you, then finish.\n`
+					: "You showed the user something in agent-dailies and nothing is listening for their comments. " +
+							"Start `agent-dailies watch` with run_in_background (timeout 7200000) so a comment wakes you, then finish.\n",
 			);
 			process.exitCode = 2;
 			return;
@@ -544,6 +778,10 @@ async function main(argv: string[]): Promise<void> {
 	switch (command) {
 		case "show":
 			return show(rest);
+		case "ask":
+			return ask(rest);
+		case "wait":
+			return wait(rest);
 		case "context":
 			return context(rest);
 		case "feedback":

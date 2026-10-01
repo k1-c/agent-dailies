@@ -143,3 +143,33 @@ test("other sites cannot use the API", async () => {
 	});
 	assert.equal(status, 403);
 });
+
+test("answers are checked against the question, pushed to pages and to whoever waits on the post", async () => {
+	const ask = await post<{ post: PostView }>("/api/posts", {
+		project: "game",
+		lane: "summ-1",
+		session: "s2",
+		title: "Which?",
+		items: [items[0]],
+		questions: [
+			{ id: "q1", text: "Which?", items: [], options: [{ id: "o1", key: "A", items: [items[0]!.id] }, { id: "o2", key: "B", label: "Neither", items: [] }] },
+			{ id: "q2", text: "Which colors?", multi: true, items: [], options: [{ id: "o1", key: "A", label: "Red", items: [] }, { id: "o2", key: "B", label: "Blue", items: [] }] },
+		],
+	});
+	assert.equal(ask.status, 201);
+	const postId = ask.body.post.id;
+	assert.equal((await post("/api/answers", { post: postId, question: "q1", choices: ["o9"] })).status, 400);
+	assert.equal((await post("/api/answers", { post: postId, question: "q1", choices: ["o1", "o2"] })).status, 400);
+	assert.equal((await post("/api/answers", { post: postId, question: "q1", choices: [] })).status, 400);
+	assert.equal((await post("/api/answers", { post: postId, question: "q9", choices: ["o1"] })).status, 404);
+	assert.equal((await post("/api/answers", { post: postId, question: "q2", choices: ["o1", "o2"] })).status, 201);
+
+	const [pushed] = await collect(`/api/watch?post=${postId}`, "feedback", 1, async () => {
+		const count = (await (await fetch(`${base}/api/watchers?session=nobody&post=${postId}`)).json()) as { watching: number };
+		assert.equal(count.watching, 1);
+		await post("/api/answers", { post: postId, question: "q1", choices: ["o2"], text: " redo it ", by: "human" });
+	});
+	assert.deepEqual((pushed as { choices: string[]; text: string }).choices, ["o2"]);
+	assert.equal((pushed as { text: string }).text, "redo it");
+	assert.deepEqual(server.catalog.openQuestions(server.catalog.post(postId)!), []);
+});

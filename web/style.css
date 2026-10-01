@@ -498,6 +498,268 @@ button {
 	padding: 3px 7px;
 }
 
+/* Questions */
+
+.post.asking {
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.chip.state {
+	color: var(--adopted);
+	border-color: color-mix(in srgb, var(--adopted) 45%, transparent);
+}
+
+.chip.state.open {
+	color: #1b1408;
+	background: var(--accent);
+	border-color: var(--accent);
+	font-weight: 650;
+}
+
+.open-questions {
+	padding: 4px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: #1b1408;
+	font-size: 13px;
+	font-weight: 650;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.question {
+	margin: 4px 16px 14px;
+	padding: 14px 14px 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--raised);
+}
+
+.question + .question {
+	margin-top: 10px;
+}
+
+.q-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px 10px;
+}
+
+.q-text {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 650;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.q-state {
+	padding: 1px 8px;
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 650;
+	white-space: nowrap;
+}
+
+.q-state.open {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+
+.q-state.done {
+	background: var(--adopted-soft);
+	color: var(--adopted);
+}
+
+.q-hint {
+	color: var(--faint);
+	font-size: 12px;
+}
+
+.q-why {
+	margin-top: 6px;
+	color: var(--muted);
+}
+
+.md p {
+	margin: 0 0 6px;
+}
+
+.md p:last-child,
+.md ul:last-child {
+	margin-bottom: 0;
+}
+
+.md ul {
+	margin: 0 0 6px;
+	padding-left: 1.2em;
+}
+
+.md code {
+	font: 12px var(--mono);
+	padding: 0 4px;
+	border-radius: 4px;
+	background: var(--sunken);
+}
+
+.question .grid.context {
+	padding: 10px 0 0;
+}
+
+.options {
+	display: grid;
+	gap: 8px;
+	margin-top: 12px;
+	grid-template-columns: repeat(var(--columns, 1), minmax(0, 1fr));
+	align-items: start;
+}
+
+.option {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: var(--surface);
+	cursor: pointer;
+	transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.option:hover {
+	border-color: var(--line-strong);
+}
+
+.option:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.option.chosen {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.option.sent {
+	border-color: var(--adopted);
+}
+
+.option.sent.chosen {
+	background: var(--adopted-soft);
+	box-shadow: 0 0 0 1px var(--adopted) inset;
+}
+
+.o-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.o-key {
+	display: inline-grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 7px;
+	border: 1px solid var(--line-strong);
+	font-weight: 700;
+	font-size: 13px;
+	flex: none;
+}
+
+.option.chosen .o-key {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: #1b1408;
+}
+
+.option.sent.chosen .o-key {
+	background: var(--adopted);
+	border-color: var(--adopted);
+	color: #07150b;
+}
+
+.o-label {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.o-num {
+	color: var(--faint);
+	font: 11px var(--mono);
+}
+
+.o-body {
+	color: var(--muted);
+	font-size: 13px;
+	padding-left: 32px;
+}
+
+.option .stage {
+	border-radius: 7px;
+	overflow: hidden;
+	height: clamp(180px, 34vh, 420px);
+}
+
+.options:not(.media) .option .stage {
+	height: clamp(160px, 28vh, 320px);
+}
+
+.answer-row {
+	display: flex;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.answer-row input {
+	flex: 1;
+	min-width: 0;
+	padding: 7px 10px;
+	border-radius: 8px;
+	border: 1px solid var(--line);
+	background: var(--sunken);
+	color: var(--text);
+	font: inherit;
+}
+
+.answer-row input:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+
+.send {
+	padding: 7px 16px;
+	border-radius: 8px;
+	border: 1px solid var(--accent);
+	background: var(--accent);
+	color: #1b1408;
+	font-weight: 650;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.send:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.answered-line {
+	margin-top: 8px;
+	font-size: 13px;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.answered-line .who {
+	color: var(--adopted);
+	font-weight: 650;
+}
+
 /* Comments */
 
 .comments {
@@ -696,7 +958,8 @@ button {
 }
 
 @media (max-width: 760px) {
-	.grid {
+	.grid,
+	.options {
 		grid-template-columns: minmax(0, 1fr) !important;
 	}
 

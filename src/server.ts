@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { version } from "./config.ts";
 import {
+	type AnswerEvent,
 	buildPost,
 	Catalog,
 	newId,
@@ -74,7 +75,10 @@ export class DailiesServer {
 	readonly catalog: Catalog;
 	readonly http: Server;
 	private readonly clients = new Set<ServerResponse>();
-	/** `agent-dailies watch` processes waiting for comments, by agent session. */
+	/**
+	 * `agent-dailies watch` / `ask --wait` processes waiting for the user to say
+	 * something, keyed "session:<agent session>" or "post:<post id>".
+	 */
 	private readonly watchers = new Map<string, Set<ServerResponse>>();
 	private selection: Selection | null;
 	private readonly allowedHosts: Set<string> | null;
@@ -189,10 +193,44 @@ export class DailiesServer {
 		};
 		this.record(event);
 		this.broadcast("comment", event);
-		if (by === "human" && post.session) {
-			for (const watcher of this.watchers.get(post.session) ?? []) watcher.write(`event: feedback\ndata: ${JSON.stringify(event)}\n\n`);
-		}
+		if (by === "human") this.notify(post, event);
 		return event;
+	}
+
+	addAnswer(postId: string, questionId: string, choices: unknown, text: string | undefined, by: Author): AnswerEvent {
+		const post = this.catalog.post(postId);
+		if (!post) throw new HttpError(404, `no post ${postId}`);
+		const question = post.questions?.find((candidate) => candidate.id === questionId);
+		if (!question) throw new HttpError(404, `no question ${questionId} in ${postId}`);
+		const chosen = Array.isArray(choices) ? [...new Set(choices.map(String))] : [];
+		for (const choice of chosen) {
+			if (!question.options.some((option) => option.id === choice)) throw new HttpError(400, `no option ${choice} in ${questionId}`);
+		}
+		if (chosen.length > 1 && !question.multi) throw new HttpError(400, "this question takes one choice");
+		const said = text?.trim() || undefined;
+		if (!chosen.length && !said) throw new HttpError(400, "choose an option or write something");
+		const event: AnswerEvent = {
+			type: "answer",
+			id: newId("a"),
+			at: new Date().toISOString(),
+			machine: this.store.machine,
+			post: postId,
+			question: questionId,
+			choices: chosen,
+			text: said,
+			by,
+		};
+		this.record(event);
+		this.broadcast("answer", event);
+		if (by === "human") this.notify(post, event);
+		return event;
+	}
+
+	private notify(post: PostEvent, event: CommentEvent | AnswerEvent): void {
+		const message = `event: feedback\ndata: ${JSON.stringify(event)}\n\n`;
+		for (const key of [post.session ? `session:${post.session}` : "", `post:${post.id}`]) {
+			for (const watcher of this.watchers.get(key) ?? []) watcher.write(message);
+		}
 	}
 
 	select(postId: string | null, itemId?: string): Selection | null {
@@ -222,7 +260,7 @@ export class DailiesServer {
 	}
 
 	watching(session: string): number {
-		return this.watchers.get(session)?.size ?? 0;
+		return this.watchers.get(`session:${session}`)?.size ?? 0;
 	}
 
 	private broadcast(type: string, data: unknown): void {
@@ -256,6 +294,12 @@ export class DailiesServer {
 						response,
 						201,
 						this.addComment(String(body.post), body.item ? String(body.item) : undefined, String(body.text ?? ""), author(body.by)),
+					);
+				case "/api/answers":
+					return sendJson(
+						response,
+						201,
+						this.addAnswer(String(body.post), String(body.question), body.choices, body.text === undefined ? undefined : String(body.text), author(body.by)),
 					);
 				case "/api/select":
 					return sendJson(response, 200, this.select(body.post ? String(body.post) : null, body.item ? String(body.item) : undefined));
@@ -292,12 +336,16 @@ export class DailiesServer {
 				return this.openStream(request, response);
 			case "/api/watch": {
 				const session = url.searchParams.get("session");
-				if (!session) throw new HttpError(400, "session is required");
-				return this.openWatch(session, request, response);
+				const post = url.searchParams.get("post");
+				if (!session && !post) throw new HttpError(400, "session or post is required");
+				return this.openWatch(session ? `session:${session}` : `post:${post}`, request, response);
 			}
 			case "/api/watchers": {
+				// Counts what listens for a session's feedback, plus (with post=) what waits on one post.
 				const session = url.searchParams.get("session") ?? "";
-				return sendJson(response, 200, { session, watching: this.watching(session) });
+				const post = url.searchParams.get("post");
+				const onPost = post ? (this.watchers.get(`post:${post}`)?.size ?? 0) : 0;
+				return sendJson(response, 200, { session, watching: this.watching(session) + onPost });
 			}
 			case "/vendor/model-viewer.js": {
 				const file = modelViewerPath();
@@ -337,19 +385,19 @@ export class DailiesServer {
 		return undefined;
 	}
 
-	private openWatch(session: string, request: IncomingMessage, response: ServerResponse): void {
+	private openWatch(key: string, request: IncomingMessage, response: ServerResponse): void {
 		response.writeHead(200, {
 			"content-type": "text/event-stream; charset=utf-8",
 			"cache-control": "no-cache",
 			connection: "keep-alive",
 		});
-		response.write(`event: hello\ndata: ${JSON.stringify({ session })}\n\n`);
-		const set = this.watchers.get(session) ?? new Set<ServerResponse>();
+		response.write(`event: hello\ndata: ${JSON.stringify({ watching: key })}\n\n`);
+		const set = this.watchers.get(key) ?? new Set<ServerResponse>();
 		set.add(response);
-		this.watchers.set(session, set);
+		this.watchers.set(key, set);
 		request.on("close", () => {
 			set.delete(response);
-			if (!set.size) this.watchers.delete(session);
+			if (!set.size) this.watchers.delete(key);
 		});
 	}
 

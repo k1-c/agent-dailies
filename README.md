@@ -9,9 +9,10 @@ the agent one place to put things instead: a browser tab you keep open, where
 every result appears at the top as it is made, side by side with the
 alternatives, and stays there.
 
-You mark files **adopted** or **rejected** and write comments right on the page.
+You mark files **adopted** or **rejected**, answer the agent's questions ("which
+of these three?", a whole design review) and write comments right on the page.
 Those come back to the agent — even while it is idle — so the review loop runs
-through the page instead of through copy-pasted paths.
+through the page instead of through copy-pasted paths and options typed in chat.
 
 Named after *dailies*, the daily review where a film or game team looks at
 yesterday's renders and decides what to keep.
@@ -24,13 +25,16 @@ yesterday's renders and decides what to keep.
 - **Grouped by worktree** — posts carry the repository, worktree/branch, the
   issue key from the branch name (`summ-239` → `SUMM-239`) and the agent session,
   so parallel agents never mix.
+- **Questions** — `agent-dailies ask` turns files and sentences into options
+  A, B, C… to pick from, or takes a whole review sheet of decisions; your answers
+  wake the agent.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
   next message.
 - **Kept** — files are stored by content hash outside your repository, so they
   survive worktree cleanup and never bloat git.
 - **Keyboard first** — `j`/`k` posts, `h`/`l` files, `a` adopt, `x` reject,
-  `c` comment, `f` full screen.
+  `c` comment, `f` full screen, `1`–`9` choose an option, `Enter` send it.
 
 ## Install
 
@@ -80,22 +84,42 @@ Shown 2 files in the viewer: http://127.0.0.1:4777/#p_mupkr1fn81b4a9
 The viewer is open in 1 tab; it updated in place. No need to open anything.
 ```
 
-You look, mark, and comment in the tab. The agent reads it back:
+When it needs a decision, it asks:
+
+```sh
+agent-dailies ask "Which front view do we keep?" a.png b.png --option "Neither — redraw it" \
+  --why "B matches the back view best; A loses the cape."
+agent-dailies ask --file review.json      # several decisions at once (see the skill for the format)
+agent-dailies wait <post-id>              # in the background: exits with the answers
+```
+
+You look, mark, answer and comment in the tab. The agent reads it back:
 
 | Command | What it gives the agent |
 | --- | --- |
-| `agent-dailies context` | What you selected (or the newest post): files with readable paths, marks, comments |
+| `agent-dailies context` | What you selected (or the newest post): files with readable paths, marks, answers, comments |
+| `agent-dailies wait <post-id>` | Blocks until every question of a post is answered (or you comment on it), prints the answers, exits |
 | `agent-dailies watch` | Blocks until you comment on this session's posts, prints the feedback, exits. Run it in the background so your comment wakes the agent |
-| `agent-dailies feedback [--since 2h] [--all]` | Your marks and comments for this worktree |
+| `agent-dailies feedback [--since 2h] [--all]` | Your marks, answers and comments for this worktree |
 | `agent-dailies list [--all]` | Recent posts |
 | `agent-dailies get <item-id> [--to PATH]` | A stored file |
 
 And for you: `agent-dailies open` (open the viewer), `status`, `stop`.
 
-### How comments get back to the agent
+### When to use it
+
+| Situation | Use |
+| --- | --- |
+| The agent's work in progress, to look at | `show` |
+| A decision on it: which option, approve a design, what to keep | `ask` |
+| A page other people read, or that outlives the work (a report, a shared doc) | your agent's documents / Artifacts |
+| A quick choice with nothing to look at | the terminal |
+
+### How comments and answers get back to the agent
 
 Every post remembers the agent session that showed it (`CLAUDE_CODE_SESSION_ID`).
-A comment on it is pending for that session until it has been handed over once:
+A comment on it, or an answer to its questions, is pending for that session until
+it has been handed over once:
 
 1. **While the agent is idle** — it keeps `agent-dailies watch` running in the
    background. Claude Code wakes the agent when a background command exits, and
@@ -112,7 +136,7 @@ A comment on it is pending for that session until it has been handed over once:
 ```text
 $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
   blobs/<ab>/<sha256><ext>           files, once per content
-  log/<machine>.jsonl                append-only events: post, verdict, comment
+  log/<machine>.jsonl                append-only events: post (with its questions), verdict, comment, answer
   sessions/<session>.json            what each agent session has been handed
   selection.json                     what is selected in the viewer
   server.log

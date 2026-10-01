@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { hasComment, markDelivered, orphanedIn, pendingFor, postedBy } from "../src/feedback.ts";
+import { describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy } from "../src/feedback.ts";
 import { buildPost, Store, type CommentEvent, type VerdictEvent } from "../src/store.ts";
 import { PNG, tempDir, writeFile } from "./helpers.ts";
 
@@ -35,14 +35,14 @@ test("a session gets the feedback on its own posts once", async () => {
 
 	let pending = pendingFor(store.load(), store, "s1");
 	assert.deepEqual(pending.map((event) => event.id), ["v1", "c1"]);
-	assert.equal(hasComment(pending), true);
+	assert.equal(hasMessage(pending), true);
 	markDelivered(store, "s1", pending);
 	assert.deepEqual(pendingFor(store.load(), store, "s1"), []);
 
 	store.append(verdict("v2", "2026-10-01T00:04:00Z"));
 	pending = pendingFor(store.load(), store, "s1");
 	assert.deepEqual(pending.map((event) => event.id), ["v2"]);
-	assert.equal(hasComment(pending), false);
+	assert.equal(hasMessage(pending), false);
 });
 
 test("feedback no session took is found by the next session in the worktree", async () => {
@@ -54,4 +54,27 @@ test("feedback no session took is found by the next session in the worktree", as
 	assert.deepEqual(orphanedIn(catalog, store, "game", "main", "s2"), []);
 	assert.equal(postedBy(catalog, "s1").length, 1);
 	assert.equal(postedBy(catalog, "s1", 1000).length, 0);
+});
+
+test("an answer is a message, described with the options chosen", async () => {
+	const dir = tempDir();
+	const store = new Store(join(dir, "home"), "m");
+	const item = await store.addFile(writeFile(dir, "front.png", PNG));
+	const post = buildPost(
+		{
+			project: "game",
+			lane: "summ-1",
+			session: "s1",
+			title: "Front view",
+			items: [item],
+			questions: [{ id: "q1", text: "Keep which?", items: [], options: [{ id: "o1", key: "A", items: [item.id] }, { id: "o2", key: "B", label: "Redraw", items: [] }] }],
+		},
+		"m",
+	);
+	store.append(post);
+	store.append({ type: "answer", id: "a1", at: new Date(Date.now() + 1000).toISOString(), machine: "m", post: post.id, question: "q1", choices: ["o1"], text: "this one", by: "human" });
+	const catalog = store.load();
+	const pending = pendingFor(catalog, store, "s1");
+	assert.equal(hasMessage(pending), true);
+	assert.match(describeFeedback(catalog, pending)[0] ?? "", /"Keep which\?" → A \(front\.png\) — "this one"/);
 });

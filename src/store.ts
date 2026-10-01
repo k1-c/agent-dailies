@@ -50,6 +50,31 @@ export interface Where {
 	cwd?: string;
 }
 
+/** One choice in a question. It can be a file (or several), a sentence, or both. */
+export interface QuestionOption {
+	id: string;
+	/** A, B, C… — what the user and the agent call it. */
+	key: string;
+	label?: string;
+	/** Longer text: the reasoning, the trade-off. Light Markdown (bold, code, lists). */
+	body?: string;
+	/** Ids of this post's items that belong to the option. */
+	items: string[];
+}
+
+/** Something the agent needs the user to decide. */
+export interface Question {
+	id: string;
+	text: string;
+	/** Why it matters, or why the agent proposes what it does. */
+	why?: string;
+	/** Ids of this post's items that give context to the question. */
+	items: string[];
+	options: QuestionOption[];
+	/** More than one option may be chosen. */
+	multi?: boolean;
+}
+
 export interface PostEvent extends Where {
 	type: "post";
 	id: string;
@@ -59,6 +84,8 @@ export interface PostEvent extends Where {
 	note?: string;
 	tags: string[];
 	items: Item[];
+	/** Present when the post asks the user to decide something. */
+	questions?: Question[];
 }
 
 export interface VerdictEvent {
@@ -84,7 +111,20 @@ export interface CommentEvent {
 	by: Author;
 }
 
-export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent;
+export interface AnswerEvent {
+	type: "answer";
+	id: string;
+	at: string;
+	machine: string;
+	post: string;
+	question: string;
+	/** Option ids; empty when the user only wrote something. */
+	choices: string[];
+	text?: string;
+	by: Author;
+}
+
+export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent;
 
 export interface Selection {
 	post: string;
@@ -212,10 +252,13 @@ export interface PostInput extends Where {
 	note?: string;
 	tags?: string[];
 	items: Item[];
+	questions?: Question[];
 }
 
 export function buildPost(input: PostInput, machine: string, at: Date = new Date()): PostEvent {
-	if (!Array.isArray(input.items) || input.items.length === 0) throw new Error("a post needs at least one item");
+	const questions = Array.isArray(input.questions) && input.questions.length ? input.questions : undefined;
+	if (!Array.isArray(input.items) || (input.items.length === 0 && !questions)) throw new Error("a post needs at least one item or question");
+	if (questions) checkQuestions(questions, input.items);
 	return {
 		type: "post",
 		id: newId("p", at.getTime()),
@@ -231,7 +274,27 @@ export function buildPost(input: PostInput, machine: string, at: Date = new Date
 		note: input.note || undefined,
 		tags: Array.isArray(input.tags) ? input.tags.map(String) : [],
 		items: input.items,
+		questions,
 	};
+}
+
+function checkQuestions(questions: Question[], items: Item[]): void {
+	const known = new Set(items.map((item) => item.id));
+	const ids = new Set<string>();
+	for (const question of questions) {
+		if (!question.id || ids.has(question.id)) throw new Error("each question needs its own id");
+		ids.add(question.id);
+		if (!String(question.text ?? "").trim()) throw new Error(`question ${question.id} has no text`);
+		if (!Array.isArray(question.options)) throw new Error(`question ${question.id} has no options`);
+		const optionIds = new Set<string>();
+		for (const option of question.options) {
+			if (!option.id || optionIds.has(option.id)) throw new Error(`question ${question.id}: each option needs its own id`);
+			optionIds.add(option.id);
+			for (const item of [...(option.items ?? []), ...(question.items ?? [])]) {
+				if (!known.has(item)) throw new Error(`question ${question.id} refers to an unknown item ${item}`);
+			}
+		}
+	}
 }
 
 export function compareEvents(a: DailiesEvent, b: DailiesEvent): number {
@@ -245,6 +308,8 @@ export interface ItemView extends Item {
 export interface PostView extends Omit<PostEvent, "items"> {
 	items: ItemView[];
 	comments: CommentEvent[];
+	/** The latest answer to each question, by question id. */
+	answers: Record<string, AnswerEvent>;
 }
 
 /** The state the events add up to. */
@@ -254,7 +319,8 @@ export class Catalog {
 	private readonly itemPost = new Map<string, string>();
 	private readonly verdicts = new Map<string, VerdictEvent>();
 	private readonly comments = new Map<string, CommentEvent[]>();
-	readonly history: (VerdictEvent | CommentEvent)[] = [];
+	private readonly answers = new Map<string, Map<string, AnswerEvent>>();
+	readonly history: (VerdictEvent | CommentEvent | AnswerEvent)[] = [];
 
 	apply(event: DailiesEvent): void {
 		switch (event.type) {
@@ -274,6 +340,14 @@ export class Catalog {
 				const list = this.comments.get(event.post) ?? [];
 				list.push(event);
 				this.comments.set(event.post, list);
+				this.history.push(event);
+				break;
+			}
+			case "answer": {
+				const byQuestion = this.answers.get(event.post) ?? new Map<string, AnswerEvent>();
+				const previous = byQuestion.get(event.question);
+				if (!previous || compareEvents(previous, event) < 0) byQuestion.set(event.question, event);
+				this.answers.set(event.post, byQuestion);
 				this.history.push(event);
 				break;
 			}
@@ -298,7 +372,17 @@ export class Catalog {
 			...post,
 			items: post.items.map((item) => ({ ...item, verdict: this.verdictOf(item.id) })),
 			comments: this.comments.get(post.id) ?? [],
+			answers: Object.fromEntries(this.answers.get(post.id) ?? []),
 		};
+	}
+
+	answerOf(postId: string, questionId: string): AnswerEvent | undefined {
+		return this.answers.get(postId)?.get(questionId);
+	}
+
+	/** Questions of a post that have no answer yet. */
+	openQuestions(post: PostEvent): Question[] {
+		return (post.questions ?? []).filter((question) => !this.answerOf(post.id, question.id));
 	}
 
 	/** Newest first. `before` is a post id to page from. */

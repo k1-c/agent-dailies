@@ -5,6 +5,7 @@
 	const $ = (id) => document.getElementById(id);
 	const feed = $("feed");
 	const lanesNav = $("lanes");
+	const openButton = $("open-questions");
 	const status = $("status");
 	const statusText = $("status-text");
 	const fresh = $("fresh");
@@ -271,6 +272,260 @@
 		return { item: undefined, label: post.items.length > 1 ? t.commentOnPost : "" };
 	}
 
+	// ---- questions ----
+
+	const drafts = new Map(); // `${post}/${question}` -> Set of option ids picked but not sent
+
+	function questionItemIds(post) {
+		const ids = new Set();
+		for (const question of post.questions || []) {
+			for (const id of question.items || []) ids.add(id);
+			for (const option of question.options) for (const id of option.items || []) ids.add(id);
+		}
+		return ids;
+	}
+
+	// A little Markdown for option texts: paragraphs, "- " lists, **bold**, `code`.
+	function markdown(text) {
+		const escape = (value) => value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+		const inline = (value) =>
+			escape(value)
+				.replace(/`([^`]+)`/g, "<code>$1</code>")
+				.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+		const blocks = String(text).trim().split(/\n\s*\n/);
+		const bullet = /^\s*[-*・]\s+/;
+		const html = blocks
+			.map((block) => {
+				// Runs of bullet lines become lists; other lines stay paragraphs.
+				const out = [];
+				let run = [];
+				let list = false;
+				const flush = () => {
+					if (!run.length) return;
+					out.push(list ? `<ul>${run.map((line) => `<li>${inline(line.replace(bullet, ""))}</li>`).join("")}</ul>` : `<p>${run.map(inline).join("<br>")}</p>`);
+					run = [];
+				};
+				for (const line of block.split("\n")) {
+					const isBullet = bullet.test(line);
+					if (run.length && isBullet !== list) flush();
+					list = isBullet;
+					run.push(line);
+				}
+				flush();
+				return out.join("");
+			})
+			.join("");
+		const box = el("div", { class: "md" });
+		box.innerHTML = html;
+		return box;
+	}
+
+	function picked(post, question) {
+		const key = `${post.id}/${question.id}`;
+		if (!drafts.has(key)) drafts.set(key, new Set(post.answers?.[question.id]?.choices || []));
+		return drafts.get(key);
+	}
+
+	function buildQuestion(post, question) {
+		const block = el("section", { class: "question", "data-question": question.id });
+		renderQuestion(block, post, question);
+		return block;
+	}
+
+	function renderQuestion(block, post, question) {
+		const answer = post.answers?.[question.id];
+		const chosen = picked(post, question);
+		// A post that asks one thing is already titled with the question.
+		const titled = post.questions.length === 1 && post.title === question.text;
+		const head = el("div", { class: "q-head" }, [
+			el("span", { class: `q-state ${answer ? "done" : "open"}`, text: answer ? t.answered : t.waiting }),
+			titled ? null : el("h3", { class: "q-text", text: question.text }),
+			question.multi ? el("span", { class: "q-hint", text: t.multi }) : null,
+		]);
+		const parts = [head];
+		if (question.why) parts.push(el("div", { class: "q-why" }, [markdown(question.why)]));
+		if ((question.items || []).length) {
+			const grid = el("div", { class: "grid context", "data-columns": String(columnsFor(question.items.length)) });
+			grid.style.setProperty("--columns", String(columnsFor(question.items.length)));
+			for (const id of question.items) {
+				const item = post.items.find((candidate) => candidate.id === id);
+				if (item) grid.append(buildTile(post, item, post.items.indexOf(item)));
+			}
+			parts.push(grid);
+		}
+		const withMedia = question.options.some((option) => (option.items || []).length);
+		const options = el("div", { class: `options${withMedia ? " media" : ""}` });
+		options.style.setProperty("--columns", String(withMedia ? columnsFor(question.options.length) : 1));
+		question.options.forEach((option, index) => {
+			const isChosen = chosen.has(option.id);
+			const card = el("div", {
+				class: `option${isChosen ? " chosen" : ""}${answer?.choices.includes(option.id) ? " sent" : ""}`,
+				role: question.multi ? "checkbox" : "radio",
+				tabindex: "0",
+				"aria-checked": String(isChosen),
+				"data-option": option.id,
+			});
+			const items = (option.items || []).map((id) => post.items.find((candidate) => candidate.id === id)).filter(Boolean);
+			card.append(
+				el("div", { class: "o-head" }, [
+					el("span", { class: "o-key", text: option.key }),
+					el("span", { class: "o-label", text: option.label || items.map((item) => item.name).join(", ") }),
+					el("span", { class: "o-num", text: index < 9 ? String(index + 1) : "" }),
+				]),
+			);
+			if (option.body) card.append(el("div", { class: "o-body" }, [markdown(option.body)]));
+			for (const item of items) {
+				const stage = el("div", { class: "stage", "data-kind": item.kind, "data-item": item.id }, [media(item)]);
+				stage.addEventListener("dblclick", (event) => {
+					if (event.target.closest("model-viewer, video, audio, pre, iframe")) return;
+					openLightbox(post.id, item.id);
+				});
+				card.append(stage);
+			}
+			const toggle = () => {
+				choose(post, question, option.id);
+				if (items[0]) select(post.id, items[0].id);
+			};
+			card.addEventListener("click", (event) => {
+				if (event.target.closest("video, audio, model-viewer, a")) return;
+				toggle();
+			});
+			card.addEventListener("keydown", (event) => {
+				if (event.key === " " || event.key === "Enter") {
+					event.preventDefault();
+					toggle();
+				}
+			});
+			options.append(card);
+		});
+		parts.push(options);
+
+		const note = el("input", {
+			type: "text",
+			class: "q-note",
+			placeholder: t.answerNote,
+			"aria-label": t.answerNote,
+		});
+		note.value = block.querySelector(".q-note")?.value || "";
+		const changed = answer && (!sameSet(chosen, new Set(answer.choices)) || (note.value.trim() && note.value.trim() !== (answer.text || "")));
+		const send = el("button", {
+			class: "send",
+			type: "button",
+			text: answer ? t.resend : t.send,
+			disabled: !chosen.size && !note.value.trim() ? true : answer && !changed ? true : undefined,
+			onclick: () => sendAnswer(post, question, note.value),
+		});
+		note.addEventListener("input", () => {
+			const empty = !chosen.size && !note.value.trim();
+			send.disabled = empty || (answer && sameSet(chosen, new Set(answer.choices)) && note.value.trim() === (answer.text || ""));
+		});
+		note.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" && !event.isComposing && !send.disabled) {
+				event.preventDefault();
+				sendAnswer(post, question, note.value);
+			}
+		});
+		const row = el("div", { class: "answer-row" }, [note, send]);
+		parts.push(row);
+		if (answer) {
+			parts.push(
+				el("div", { class: "answered-line" }, [
+					el("span", { class: "who", text: `${t.yourAnswer}: ` }),
+					document.createTextNode(answerSummary(question, answer)),
+					el("span", { class: "time", text: `  ${ago(answer.at)}` }),
+				]),
+			);
+		}
+		block.replaceChildren(...parts);
+	}
+
+	// The first question of a post whose picks differ from what was sent.
+	function pendingQuestion(post) {
+		return (post.questions || []).find((question) => {
+			const chosen = picked(post, question);
+			const answer = post.answers?.[question.id];
+			return chosen.size && (!answer || !sameSet(chosen, new Set(answer.choices)));
+		});
+	}
+
+	function sameSet(a, b) {
+		return a.size === b.size && [...a].every((value) => b.has(value));
+	}
+
+	function answerSummary(question, answer) {
+		const chosen = answer.choices
+			.map((id) => question.options.find((option) => option.id === id))
+			.filter(Boolean)
+			.map((option) => (option.label ? `${option.key}（${option.label}）` : option.key));
+		return [chosen.join(" + "), answer.text ? `「${answer.text}」` : ""].filter(Boolean).join(" ");
+	}
+
+	function choose(post, question, optionId) {
+		const chosen = picked(post, question);
+		if (question.multi) {
+			if (chosen.has(optionId)) chosen.delete(optionId);
+			else chosen.add(optionId);
+		} else {
+			const only = chosen.has(optionId) && chosen.size === 1;
+			chosen.clear();
+			if (!only) chosen.add(optionId);
+		}
+		refreshQuestion(post, question);
+	}
+
+	function refreshQuestion(post, question) {
+		const block = document.getElementById(post.id)?.querySelector(`.question[data-question="${question.id}"]`);
+		if (block) renderQuestion(block, post, question);
+	}
+
+	async function sendAnswer(post, question, text) {
+		const choices = [...picked(post, question)];
+		try {
+			const answer = await api("/api/answers", { post: post.id, question: question.id, choices, text: text.trim() || undefined, by: "human" });
+			applyAnswer(answer);
+			const block = document.getElementById(post.id)?.querySelector(`.question[data-question="${question.id}"]`);
+			const note = block?.querySelector(".q-note");
+			if (note) note.value = "";
+			if (block) renderQuestion(block, post, question);
+		} catch (error) {
+			console.error(error);
+		}
+	}
+
+	function applyAnswer(answer) {
+		const post = posts.get(answer.post);
+		if (!post) return;
+		const previous = post.answers?.[answer.question];
+		if (previous && previous.at >= answer.at) return;
+		post.answers = { ...(post.answers || {}), [answer.question]: answer };
+		const question = post.questions?.find((candidate) => candidate.id === answer.question);
+		if (!question) return;
+		drafts.set(`${post.id}/${question.id}`, new Set(answer.choices));
+		refreshQuestion(post, question);
+		const node = document.getElementById(post.id);
+		if (node) updatePostState(node, post);
+		renderOpen();
+	}
+
+	function openQuestions(post) {
+		return (post.questions || []).filter((question) => !post.answers?.[question.id]);
+	}
+
+	function updatePostState(node, post) {
+		const chip = node.querySelector(".chip.state");
+		if (!chip) return;
+		const open = openQuestions(post).length;
+		chip.textContent = open ? t.waitingCount(open, post.questions.length) : t.answered;
+		chip.classList.toggle("open", open > 0);
+		node.classList.toggle("asking", open > 0);
+	}
+
+	function renderOpen() {
+		const open = order.map((id) => posts.get(id)).filter((post) => visible(post) && openQuestions(post).length);
+		openButton.hidden = open.length === 0;
+		openButton.textContent = t.openQuestions(open.reduce((sum, post) => sum + openQuestions(post).length, 0));
+	}
+
 	function buildPostElement(post) {
 		const node = el("section", { class: "post", id: post.id, "data-post": post.id });
 		const title = post.title || post.items.map((item) => item.name).join(" · ");
@@ -281,12 +536,19 @@
 			post.items.length > 1 ? el("span", { class: "time", text: t.files(post.items.length) }) : null,
 			el("time", { class: "time", datetime: post.at, title: new Date(post.at).toLocaleString(), text: ago(post.at) }),
 		]);
+		if (post.questions?.length) meta.prepend(el("span", { class: "chip state" }));
 		node.append(el("header", { class: "post-head" }, [el("h2", { class: "post-title", text: title }), meta]));
 		if (post.note) node.append(el("p", { class: "note", text: post.note }));
-		const grid = el("div", { class: "grid", "data-columns": String(columnsFor(post.items.length)) });
-		grid.style.setProperty("--columns", String(columnsFor(post.items.length)));
-		post.items.forEach((item, index) => grid.append(buildTile(post, item, index)));
-		node.append(grid);
+		for (const question of post.questions || []) node.append(buildQuestion(post, question));
+		const inQuestions = questionItemIds(post);
+		const loose = post.items.filter((item) => !inQuestions.has(item.id));
+		if (loose.length) {
+			const grid = el("div", { class: "grid", "data-columns": String(columnsFor(loose.length)) });
+			grid.style.setProperty("--columns", String(columnsFor(loose.length)));
+			loose.forEach((item) => grid.append(buildTile(post, item, post.items.indexOf(item))));
+			node.append(grid);
+		}
+		updatePostState(node, post);
 
 		const list = el("div", { class: "comment-list" });
 		for (const comment of post.comments || []) list.append(buildComment(post, comment));
@@ -346,6 +608,7 @@
 			}
 		}
 		renderEmpty();
+		renderOpen();
 	}
 
 	function trackLane(post) {
@@ -459,6 +722,7 @@
 		}
 		renderLanes();
 		renderEmpty();
+		renderOpen();
 		window.scrollTo({ top: 0 });
 	}
 
@@ -604,15 +868,38 @@
 				if (selection) document.getElementById(selection.post)?.querySelector(".compose input")?.focus();
 				break;
 			case "f":
-			case "Enter":
-				if (selection?.item) openLightbox(selection.post, selection.item);
+			case "Enter": {
+				const post = selection && posts.get(selection.post);
+				const question = post && pendingQuestion(post);
+				if (event.key === "Enter" && question) {
+					const note = document.getElementById(post.id)?.querySelector(`.question[data-question="${question.id}"] .q-note`);
+					sendAnswer(post, question, note?.value || "");
+				} else if (selection?.item) openLightbox(selection.post, selection.item);
 				break;
+			}
 			case "Escape":
 				select(null);
 				break;
 			case "g":
 				window.scrollTo({ top: 0, behavior: "smooth" });
 				break;
+			case "1":
+			case "2":
+			case "3":
+			case "4":
+			case "5":
+			case "6":
+			case "7":
+			case "8":
+			case "9": {
+				const post = selection && posts.get(selection.post);
+				const question = post && (openQuestions(post)[0] || post.questions?.[0]);
+				const option = question?.options[Number(event.key) - 1];
+				if (!option) return;
+				choose(post, question, option.id);
+				if (option.items?.[0]) select(post.id, option.items[0]);
+				break;
+			}
 			default:
 				return;
 		}
@@ -662,6 +949,7 @@
 			setVerdict(data.item, data.verdict);
 		});
 		source.addEventListener("comment", (event) => addComment(JSON.parse(event.data)));
+		source.addEventListener("answer", (event) => applyAnswer(JSON.parse(event.data)));
 		source.addEventListener("select", (event) => {
 			const data = JSON.parse(event.data);
 			if (JSON.stringify(data) !== JSON.stringify(selection)) applySelection(data && { post: data.post, item: data.item });
@@ -678,6 +966,12 @@
 		document.getElementById(post.id)?.scrollIntoView({ block: "start" });
 	}
 
+	openButton.addEventListener("click", () => {
+		const post = order.map((id) => posts.get(id)).find((candidate) => visible(candidate) && openQuestions(candidate).length);
+		if (!post) return;
+		select(post.id, undefined);
+		document.getElementById(post.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+	});
 	fresh.addEventListener("click", () => {
 		window.scrollTo({ top: 0, behavior: "smooth" });
 		clearFresh();
