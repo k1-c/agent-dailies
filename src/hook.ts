@@ -168,9 +168,10 @@ Devlog — a record of how the work changed, for updates and devlog videos later
   notices. The merged commits and their issue are attached; \`devlog add\` refuses
   work that is not on the main branch yet. The Stop hook reminds you once after a
   merge lands.
-- To write an update ("what happened since the last one"), read
-  \`agent-dailies devlog summary\` (entries, decisions, commits, transcripts since
-  the last cut), write from it, then \`agent-dailies devlog cut --name "<what went out>"\`.
+- To write an update ("what happened since the last one"), take the period from
+  the previous update itself (when it ended), then read
+  \`agent-dailies devlog summary --since "<that time>"\` (entries, decisions, commits,
+  transcripts) and write from it.
 
 Which to use:
 - your work in progress to look at, or a choice between things to look at → agent-dailies (show / ask)

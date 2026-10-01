@@ -172,18 +172,7 @@ export interface IssueEvent {
 	by: Author;
 }
 
-/** A cut in the devlog: "summaries start from here" (an update went out). */
-export interface CutEvent {
-	type: "cut";
-	id: string;
-	at: string;
-	machine: string;
-	name?: string;
-	project?: string;
-	by: Author;
-}
-
-export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent | CutEvent;
+export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent;
 
 export interface ListFilter {
 	limit?: number;
@@ -459,7 +448,6 @@ export class Catalog {
 	private readonly comments = new Map<string, CommentEvent[]>();
 	private readonly answers = new Map<string, Map<string, AnswerEvent>>();
 	private readonly issues = new Map<string, IssueEvent>();
-	readonly cuts: CutEvent[] = [];
 	readonly history: (VerdictEvent | CommentEvent | AnswerEvent)[] = [];
 
 	apply(event: DailiesEvent): void {
@@ -483,9 +471,6 @@ export class Catalog {
 				this.history.push(event);
 				break;
 			}
-			case "cut":
-				this.cuts.push(event);
-				break;
 			case "issue": {
 				const key = event.key.toUpperCase();
 				const previous = this.issues.get(key);
@@ -588,15 +573,6 @@ export class Catalog {
 			if (filter.limit && out.length >= filter.limit) break;
 		}
 		return out;
-	}
-
-	/** The latest cut, for one project or any. */
-	lastCut(project?: string): CutEvent | undefined {
-		for (let index = this.cuts.length - 1; index >= 0; index--) {
-			const cut = this.cuts[index]!;
-			if (!project || !cut.project || cut.project === project) return cut;
-		}
-		return undefined;
 	}
 
 	/** Repositories → issues (or branches) → agent sessions, most recently active first. */

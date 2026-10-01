@@ -27,7 +27,6 @@
 	let mode = load("mode") === "devlog" ? "devlog" : "dailies";
 	let tree = [];
 	let counts = {};
-	let cuts = [];
 	let scope = readScope();
 	let query = "";
 	let currentIssue = null;
@@ -103,7 +102,7 @@
 	function readScope() {
 		try {
 			const saved = JSON.parse(load(`scope:${mode}`) || "null");
-			if (saved && typeof saved.kind === "string") return saved;
+			if (saved && typeof saved.kind === "string" && saved.kind !== "recent") return saved;
 		} catch {
 			// A scope saved by an older page; start from everything.
 		}
@@ -118,7 +117,6 @@
 	function inScope(post, target = scope) {
 		if ((post.kind === "devlog") !== (mode === "devlog")) return false;
 		if (target.kind === "all") return true;
-		if (target.kind === "recent") return false; // reloaded instead: it depends on the last cut
 		if (target.kind === "open") return openQuestions(post).length > 0;
 		if (groupIdOf(post) !== scopeGroupId(target)) return false;
 		return target.kind === "group" || post.session === target.session;
@@ -960,7 +958,7 @@
 					count ? el("span", { class: `side-count${kind === "open" ? " open" : ""}`, text: String(count) }) : null,
 				],
 			);
-		if (mode === "devlog") rows.push(smart("recent", "✎", t.sinceCut, 0), smart("all", "◷", t.allEntries, counts.devlog || 0));
+		if (mode === "devlog") rows.push(smart("all", "◷", t.allEntries, counts.devlog || 0));
 		else rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0));
 		for (const project of tree) {
 			const groups = project.groups.filter(
@@ -1048,7 +1046,6 @@
 		const group = findGroup(scopeGroupId());
 		let label = t.all;
 		if (scope.kind === "open") label = t.waiting;
-		else if (scope.kind === "recent") label = t.sinceCut;
 		else if (scope.kind === "all" && mode === "devlog") label = t.allEntries;
 		else if (group) {
 			label = `${group.issue ? `${group.issue} ` : ""}${group.issue && group.title === group.issue ? "" : group.title}`;
@@ -1131,7 +1128,6 @@
 	function scopeParams(target = scope) {
 		const params = new URLSearchParams({ limit: String(PAGE), mode });
 		if (target.kind === "open") params.set("open", "1");
-		if (target.kind === "recent") params.set("since", "lastcut");
 		if (target.kind === "group" || target.kind === "session") {
 			params.set("project", target.project);
 			if (target.issue) params.set("issue", target.issue);
@@ -1409,7 +1405,6 @@
 		}
 		tree = state.tree;
 		counts = state.counts || {};
-		cuts = state.cuts || [];
 		renderModes();
 		currentIssue = state.issue;
 		if ((scope.kind === "group" || scope.kind === "session") && !findGroup(scopeGroupId())) {
@@ -1439,20 +1434,13 @@
 		renderEmpty();
 	}
 
-	// The devlog reads as a timeline: a heading for each day, and a line where a
-	// summary went out (a cut).
+	// The devlog reads as a timeline, with a heading for each day.
 	function placeSeparators() {
-		feed.querySelectorAll(".day-sep, .cut-sep").forEach((node) => node.remove());
-		const nodes = [...feed.querySelectorAll(".post")];
-		const pending = [...cuts].sort((a, b) => (a.at < b.at ? 1 : -1));
+		feed.querySelectorAll(".day-sep").forEach((node) => node.remove());
 		let day = "";
-		for (const node of nodes) {
+		for (const node of feed.querySelectorAll(".post")) {
 			const post = posts.get(node.id);
 			if (!post) continue;
-			while (pending.length && pending[0].at > post.at) {
-				const cut = pending.shift();
-				node.before(el("div", { class: "cut-sep" }, [el("span", { text: `${t.cutLabel}${cut.name ? `: ${cut.name}` : ""} · ${new Date(cut.at).toLocaleString()}` })]));
-			}
 			const date = new Date(post.at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric", weekday: "short" });
 			if (date !== day) {
 				day = date;
@@ -1485,9 +1473,6 @@
 				markSeen();
 			}
 			refreshTree();
-		});
-		source.addEventListener("cut", () => {
-			if (mode === "devlog") loadState({ reset: true }).catch((error) => console.error(error));
 		});
 		source.addEventListener("issue", (event) => {
 			const issue = JSON.parse(event.data);

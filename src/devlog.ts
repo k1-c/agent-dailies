@@ -10,8 +10,8 @@
 //   is not recorded (landed.ts).
 // - The Claude Code transcripts of the sessions are copied into the store, as
 //   Claude Code deletes them after a while; summaries can point into them.
-// - A cut marks where the last summary (an update video, a post) ended; the
-//   next summary starts there.
+// - The period of a summary is taken from the previous update itself (when it
+//   ended): no separate marker is kept.
 
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";

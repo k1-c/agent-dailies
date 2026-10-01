@@ -23,7 +23,6 @@ import {
 	type AnswerEvent,
 	type Catalog,
 	type CommitRef,
-	type CutEvent,
 	type IssueEvent,
 	type CommentEvent,
 	type Item,
@@ -58,7 +57,7 @@ Usage:
   agent-dailies issue [KEY] [--refresh] [--title T] [--description TEXT|-] [--status S] [--url U]
                                       Show or set what an issue is about (the viewer's issue card).
                                       --refresh runs your issueCommand (config file) for it.
-  agent-dailies devlog <add|list|summary|cut|sweep> …
+  agent-dailies devlog <add|list|summary|sweep> …
                                       The devlog: record what changed (with before/after), and gather a
                                       period's entries, decisions, commits and transcripts for a summary
   agent-dailies get <item-id|post-id:n> [--to PATH]
@@ -765,10 +764,10 @@ const DEVLOG_HELP = `Usage:
       that have landed on the main branch (and not in an entry yet) are attached, and their issue
       from the merged branch; work still on a branch is refused until it is merged.
   agent-dailies devlog list [--since 7d|DATE] [--all] [--json]
-  agent-dailies devlog summary [--since cut|7d|DATE] [--until DATE] [--all] [--json]
-      Everything recorded since the last cut (or the given time): entries, decisions, commits,
-      transcripts — the material to write an update or a devlog post from.
-  agent-dailies devlog cut [--name N] [--all]      Mark that a summary went out; the next starts here.
+  agent-dailies devlog summary --since DATE|7d [--until DATE] [--all] [--json]
+      Everything recorded in a period: entries, decisions, commits, transcripts — the material to
+      write an update or a devlog post from. Take --since from the previous update itself (when it
+      ended); without it, the last 7 days.
   agent-dailies devlog sweep [--quiet]             Copy this project's Claude Code transcripts into the store.`;
 
 // A file to attach, or the id of a file already in the store (reused, not copied again).
@@ -897,11 +896,6 @@ async function devlogAdd(args: string[]): Promise<void> {
 	out(lines.join("\n"));
 }
 
-function summaryStart(catalog: Catalog, value: string | undefined, project: string | undefined): string {
-	if (!value || value === "cut") return catalog.lastCut(project)?.at ?? since(undefined, 7 * 86_400_000);
-	return since(value, 0);
-}
-
 async function devlog(args: string[]): Promise<void> {
 	const [sub, ...rest] = args;
 	const target = store();
@@ -929,24 +923,11 @@ async function devlog(args: string[]): Promise<void> {
 			const catalog = target.load();
 			const project = values.all ? undefined : detectWhere().project;
 			const summary = collect(catalog, target, {
-				since: summaryStart(catalog, values.since as string | undefined, project),
+				since: since(values.since as string | undefined, 7 * 86_400_000),
 				until: values.until ? since(values.until as string, 0) : undefined,
 				project,
 			});
 			return out(values.json ? JSON.stringify(summary, null, 2) : summaryMarkdown(catalog, target, summary));
-		}
-		case "cut": {
-			const { values } = parse(rest, { name: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
-			const body = { name: values.name, project: values.all ? undefined : detectWhere().project, by: "agent" };
-			let event: CutEvent;
-			try {
-				const viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
-				event = await viewer.post<CutEvent>("api/cuts", body);
-			} catch {
-				event = { type: "cut", id: newId("x"), at: new Date().toISOString(), machine: target.machine, name: body.name as string | undefined, project: body.project, by: "agent" };
-				target.append(event);
-			}
-			return out(values.json ? JSON.stringify(event, null, 2) : `Cut the devlog at ${event.at}${event.name ? ` (${event.name})` : ""}; the next summary starts here.`);
 		}
 		case "sweep": {
 			const { values } = parse(rest, { quiet: { type: "boolean" } });

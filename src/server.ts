@@ -20,7 +20,6 @@ import {
 	Store,
 	type Author,
 	type CommentEvent,
-	type CutEvent,
 	type DailiesEvent,
 	type IssueEvent,
 	type Item,
@@ -356,20 +355,6 @@ export class DailiesServer {
 						201,
 						this.addAnswer(String(body.post), String(body.question), body.choices, body.text === undefined ? undefined : String(body.text), author(body.by)),
 					);
-				case "/api/cuts": {
-					const event: CutEvent = {
-						type: "cut",
-						id: newId("x"),
-						at: new Date().toISOString(),
-						machine: this.store.machine,
-						name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
-						project: typeof body.project === "string" && body.project ? body.project : undefined,
-						by: author(body.by),
-					};
-					this.record(event);
-					this.broadcast("cut", event);
-					return sendJson(response, 201, event);
-				}
 				case "/api/issues":
 					return sendJson(response, 201, this.setIssue(body));
 				case "/api/path": {
@@ -420,15 +405,13 @@ export class DailiesServer {
 					q: param("q"),
 					open: url.searchParams.get("open") === "1",
 					kind: modeOf(url),
-					// "lastcut": the devlog since the last summary went out.
-					since: param("since") === "lastcut" ? this.catalog.lastCut()?.at : param("since"),
+					since: param("since"),
 					until: param("until"),
 				};
 				return sendJson(response, 200, {
 					posts: this.catalog.list(filter),
 					tree: this.catalog.tree(filter.kind),
 					counts: this.counts(),
-					cuts: filter.kind === "devlog" ? this.catalog.cuts : undefined,
 					issue: this.catalog.issue(filter.issue) ?? null,
 					selection: this.selection,
 					machine: this.store.machine,

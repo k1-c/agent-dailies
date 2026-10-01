@@ -34,7 +34,8 @@ yesterday's renders and decides what to keep.
   what changed, what worked (工夫), what was hard (苦労) and what was decided, with
   before/after — images, or videos for motion and sound — whenever the change can
   be seen or heard; later,
-  `agent-dailies devlog summary` gathers everything since the last update —
+  `agent-dailies devlog summary --since <when the last update ended>` gathers
+  everything since then —
   entries, decisions, commits, Claude Code transcripts (kept in the store before
   Claude Code deletes them) — to write the next one from.
 - **The issue on screen** — above an issue's posts, its title, status, project and
@@ -176,8 +177,7 @@ What was hard: what failed first, what was tried.
 ## 決めたこと
 What was decided.
 EOF
-agent-dailies devlog summary                      # material since the last cut
-agent-dailies devlog cut --name "Update 2026-10-02"
+agent-dailies devlog summary --since "2026-10-01 18:00"   # material since the previous update
 ```
 
 Sections may also be given as `--craft`, `--struggle`, `--decided` (English

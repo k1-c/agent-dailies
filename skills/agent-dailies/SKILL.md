@@ -132,11 +132,11 @@ EOF
   (`--commits A..B` must be on it too; `none` for work without commits). The Stop
   hook reminds you once after a merge lands — that is the moment to record.
 
-To write an update or a devlog post ("since the last one"):
+To write an update or a devlog post ("since the last one"), take the period from the
+previous update itself (when it ended — its date, or the notes kept with it):
 
 ```sh
-agent-dailies devlog summary            # since the last cut: entries, decisions, commits, transcripts
-agent-dailies devlog cut --name "Update 2026-10-02"   # after it went out
+agent-dailies devlog summary --since "2026-10-01 18:00"   # entries, decisions, commits, transcripts
 ```
 
 `agent-dailies devlog list` shows recent entries. The viewer keeps the devlog on

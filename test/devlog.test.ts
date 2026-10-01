@@ -118,8 +118,7 @@ test("a devlog entry records merged work only: refused on the branch, suggested 
 	assert.match(summary, /Before: old\.png/);
 	assert.match(summary, /feat: a thicker cape/);
 
-	assert.match((await run(["devlog", "cut", "--name", "Update 1"])).stdout, /next summary starts here/);
-	assert.match((await run(["devlog", "summary"])).stdout, /Nothing was recorded in this period\./);
+	assert.match((await run(["devlog", "summary", "--since", new Date(Date.now() + 60_000).toISOString()])).stdout, /Nothing was recorded in this period\./);
 	assert.match((await run(["devlog", "summary", "--since", "1d"])).stdout, /Thicker cape/);
 	assert.match((await run(["devlog", "list"])).stdout, /Thicker cape/);
 });
