@@ -5,6 +5,7 @@
 	const $ = (id) => document.getElementById(id);
 	const feed = $("feed");
 	const treeNav = $("tree");
+	const modesNav = $("modes");
 	const searchBox = $("search");
 	const scopeTitle = $("scope-title");
 	const issueCard = $("issue-card");
@@ -22,8 +23,11 @@
 	const PAGE = 40;
 	const posts = new Map(); // id -> post view
 	const order = []; // ids, newest first
+	// Two sides: what agents show for review (dailies) and the devlog. Each keeps its own scope.
+	let mode = load("mode") === "devlog" ? "devlog" : "dailies";
 	let tree = [];
 	let counts = {};
+	let cuts = [];
 	let scope = readScope();
 	let query = "";
 	let currentIssue = null;
@@ -98,7 +102,7 @@
 	// (or branch), or one agent session in it. Search narrows it further on the server.
 	function readScope() {
 		try {
-			const saved = JSON.parse(load("scope") || "null");
+			const saved = JSON.parse(load(`scope:${mode}`) || "null");
 			if (saved && typeof saved.kind === "string") return saved;
 		} catch {
 			// A scope saved by an older page; start from everything.
@@ -112,9 +116,10 @@
 	}
 
 	function inScope(post, target = scope) {
+		if ((post.kind === "devlog") !== (mode === "devlog")) return false;
 		if (target.kind === "all") return true;
+		if (target.kind === "recent") return false; // reloaded instead: it depends on the last cut
 		if (target.kind === "open") return openQuestions(post).length > 0;
-		if (target.kind === "devlog") return post.kind === "devlog";
 		if (groupIdOf(post) !== scopeGroupId(target)) return false;
 		return target.kind === "group" || post.session === target.session;
 	}
@@ -412,6 +417,10 @@
 		const parts = [];
 		const info = post.devlog || {};
 		if (info.summary) parts.push(el("div", { class: "devlog-summary" }, [markdown(info.summary)]));
+		const section = (key, label, text) =>
+			text ? el("div", { class: `devlog-section ${key}` }, [el("div", { class: "devlog-label", text: label }), markdown(text)]) : null;
+		const notes = [section("craft", t.craft, info.craft), section("struggle", t.struggle, info.struggle), section("decided", t.decided, info.decided)].filter(Boolean);
+		if (notes.length) parts.push(el("div", { class: "devlog-sections" }, notes));
 		const side = (label, ids) => {
 			const items = ids.map((id) => post.items.find((item) => item.id === id)).filter(Boolean);
 			const grid = el("div", { class: "grid", "data-columns": String(Math.min(items.length, 2) || 1) });
@@ -888,7 +897,7 @@
 		clearTimeout(treeTimer);
 		treeTimer = setTimeout(async () => {
 			try {
-				const response = await api("/api/tree");
+				const response = await api(`/api/tree?mode=${mode}`);
 				tree = response.tree;
 				counts = response.counts || {};
 				renderTree();
@@ -951,7 +960,8 @@
 					count ? el("span", { class: `side-count${kind === "open" ? " open" : ""}`, text: String(count) }) : null,
 				],
 			);
-		rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0), smart("devlog", "✎", t.devlog, counts.devlog || 0));
+		if (mode === "devlog") rows.push(smart("recent", "✎", t.sinceCut, 0), smart("all", "◷", t.allEntries, counts.devlog || 0));
+		else rows.push(smart("open", "★", t.waiting, openTotal), smart("all", "◷", t.all, 0));
 		for (const project of tree) {
 			const groups = project.groups.filter(
 				(group) =>
@@ -997,7 +1007,7 @@
 					),
 				);
 				if (!open) continue;
-				for (const session of group.sessions) {
+				for (const session of mode === "devlog" ? [] : group.sessions) {
 					if (query && !treeMatches(`${group.issue ?? ""} ${group.title} ${session.title}`)) continue;
 					const label = sessionLabel(session);
 					const current = scope.kind === "session" && scope.session === session.session && inside;
@@ -1038,7 +1048,8 @@
 		const group = findGroup(scopeGroupId());
 		let label = t.all;
 		if (scope.kind === "open") label = t.waiting;
-		else if (scope.kind === "devlog") label = t.devlog;
+		else if (scope.kind === "recent") label = t.sinceCut;
+		else if (scope.kind === "all" && mode === "devlog") label = t.allEntries;
 		else if (group) {
 			label = `${group.issue ? `${group.issue} ` : ""}${group.issue && group.title === group.issue ? "" : group.title}`;
 			if (scope.kind === "session") {
@@ -1107,7 +1118,7 @@
 
 	async function setScope(next) {
 		scope = next;
-		save("scope", JSON.stringify(scope));
+		save(`scope:${mode}`, JSON.stringify(scope));
 		freshCount = 0;
 		renderFresh();
 		renderTree();
@@ -1118,9 +1129,9 @@
 	}
 
 	function scopeParams(target = scope) {
-		const params = new URLSearchParams({ limit: String(PAGE) });
+		const params = new URLSearchParams({ limit: String(PAGE), mode });
 		if (target.kind === "open") params.set("open", "1");
-		if (target.kind === "devlog") params.set("devlog", "1");
+		if (target.kind === "recent") params.set("since", "lastcut");
 		if (target.kind === "group" || target.kind === "session") {
 			params.set("project", target.project);
 			if (target.issue) params.set("issue", target.issue);
@@ -1129,6 +1140,30 @@
 		if (target.kind === "session") params.set("session", target.session);
 		if (query) params.set("q", query);
 		return params;
+	}
+
+	async function setMode(next) {
+		if (next === mode) return;
+		mode = next;
+		save("mode", mode);
+		scope = readScope();
+		renderModes();
+		freshCount = 0;
+		renderFresh();
+		window.scrollTo({ top: 0 });
+		await loadState({ reset: true });
+	}
+
+	function renderModes() {
+		document.body.dataset.mode = mode;
+		for (const button of modesNav.querySelectorAll("button")) {
+			const active = button.dataset.mode === mode;
+			button.setAttribute("aria-pressed", String(active));
+			const badge = button.querySelector(".mode-count");
+			const value = button.dataset.mode === "devlog" ? counts.devlog : counts.open;
+			badge.textContent = value ? String(value) : "";
+			badge.classList.toggle("open", button.dataset.mode === "dailies" && Boolean(value));
+		}
 	}
 
 	// The sidebar's rows in order, for [ and ] to step through.
@@ -1324,6 +1359,9 @@
 			case "g":
 				window.scrollTo({ top: 0, behavior: "smooth" });
 				break;
+			case "m":
+				setMode(mode === "devlog" ? "dailies" : "devlog");
+				break;
 			case "[":
 				stepScope(-1);
 				break;
@@ -1371,6 +1409,8 @@
 		}
 		tree = state.tree;
 		counts = state.counts || {};
+		cuts = state.cuts || [];
+		renderModes();
 		currentIssue = state.issue;
 		if ((scope.kind === "group" || scope.kind === "session") && !findGroup(scopeGroupId())) {
 			scope = { kind: "all" };
@@ -1378,6 +1418,7 @@
 		}
 		hasMore = state.posts.length >= PAGE;
 		for (const post of state.posts) addPost(post, { append: true });
+		if (mode === "devlog") placeSeparators();
 		markSeen();
 		renderTree();
 		renderScope();
@@ -1393,8 +1434,31 @@
 		const state = await api(`/api/state?${params}`);
 		hasMore = state.posts.length >= PAGE;
 		for (const post of state.posts) addPost(post, { append: true });
+		if (mode === "devlog") placeSeparators();
 		applySelection(selection);
 		renderEmpty();
+	}
+
+	// The devlog reads as a timeline: a heading for each day, and a line where a
+	// summary went out (a cut).
+	function placeSeparators() {
+		feed.querySelectorAll(".day-sep, .cut-sep").forEach((node) => node.remove());
+		const nodes = [...feed.querySelectorAll(".post")];
+		const pending = [...cuts].sort((a, b) => (a.at < b.at ? 1 : -1));
+		let day = "";
+		for (const node of nodes) {
+			const post = posts.get(node.id);
+			if (!post) continue;
+			while (pending.length && pending[0].at > post.at) {
+				const cut = pending.shift();
+				node.before(el("div", { class: "cut-sep" }, [el("span", { text: `${t.cutLabel}${cut.name ? `: ${cut.name}` : ""} · ${new Date(cut.at).toLocaleString()}` })]));
+			}
+			const date = new Date(post.at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+			if (date !== day) {
+				day = date;
+				node.before(el("div", { class: "day-sep", text: date }));
+			}
+		}
 	}
 
 	function connect() {
@@ -1412,11 +1476,18 @@
 		});
 		source.addEventListener("post", (event) => {
 			const post = JSON.parse(event.data);
+			if (mode === "devlog" && post.kind === "devlog") {
+				loadState({ reset: true }).catch((error) => console.error(error));
+				return;
+			}
 			if (inScope(post) && !query) {
 				addPost(post, { arriving: true });
 				markSeen();
 			}
 			refreshTree();
+		});
+		source.addEventListener("cut", () => {
+			if (mode === "devlog") loadState({ reset: true }).catch((error) => console.error(error));
 		});
 		source.addEventListener("issue", (event) => {
 			const issue = JSON.parse(event.data);
@@ -1446,7 +1517,12 @@
 		document.getElementById(post.id)?.scrollIntoView({ block: "start" });
 	}
 
-	openButton.addEventListener("click", () => setScope({ kind: "open" }));
+	openButton.addEventListener("click", () => (mode === "dailies" ? setScope({ kind: "open" }) : setMode("dailies").then(() => setScope({ kind: "open" }))));
+	for (const button of modesNav.querySelectorAll("button")) {
+		button.querySelector(".mode-label").textContent = button.dataset.mode === "devlog" ? t.modeDevlog : t.modeDailies;
+		button.addEventListener("click", () => setMode(button.dataset.mode));
+	}
+	renderModes();
 	let searchTimer = 0;
 	searchBox.placeholder = t.search;
 	searchBox.addEventListener("input", () => {

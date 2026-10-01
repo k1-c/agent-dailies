@@ -51,15 +51,29 @@ test("a devlog entry records the session's commits and before/after, reusing sho
 	const reminded = await run(["hook", "stop"], JSON.stringify({ session_id: "dev-session", cwd: repo }));
 	assert.equal(reminded.code, 2);
 	assert.match(reminded.stderr, /1 commit since it began \(latest: feat: a thicker cape\)/);
+	assert.match(reminded.stderr, /## 工夫/);
+	assert.match(reminded.stderr, /## 苦労/);
+	assert.match(reminded.stderr, /Before\/after are required when the change can be seen/);
 	assert.equal((await run(["hook", "stop"], JSON.stringify({ session_id: "dev-session", cwd: repo }))).code, 0);
 
-	const added = await run(["devlog", "add", "--title", "Thicker cape", "--summary", "-", "--before", oldId, "--after", writeFile(dir, "new.png", Buffer.concat([PNG, Buffer.from("x")])), "--json"], "Reads at game size.");
+	const added = await run(
+		["devlog", "add", "--title", "Thicker cape", "--summary", "-", "--before", oldId, "--after", writeFile(dir, "new.png", Buffer.concat([PNG, Buffer.from("x")])), "--json"],
+		"Reads at game size.\n## 工夫\nPushed the cloth out along its normals.\n## 苦労\nThe hood clipped the horns at first.\n## Decided\nKeep the darker hem.",
+	);
 	assert.equal(added.code, 0, added.stderr);
 	const { post } = JSON.parse(added.stdout) as {
-		post: { kind: string; title: string; devlog: { summary: string; before: string[]; after: string[]; commits: { subject: string }[] }; items: { id: string; name: string }[] };
+		post: {
+			kind: string;
+			title: string;
+			devlog: { summary: string; craft: string; struggle: string; decided: string; before: string[]; after: string[]; commits: { subject: string }[] };
+			items: { id: string; name: string }[];
+		};
 	};
 	assert.equal(post.kind, "devlog");
 	assert.equal(post.devlog.summary, "Reads at game size.");
+	assert.equal(post.devlog.craft, "Pushed the cloth out along its normals.");
+	assert.equal(post.devlog.struggle, "The hood clipped the horns at first.");
+	assert.equal(post.devlog.decided, "Keep the darker hem.");
 	assert.deepEqual(post.devlog.commits.map((commit) => commit.subject), ["feat: a thicker cape"]);
 	assert.equal(post.devlog.before.length, 1);
 	assert.equal(post.items.find((item) => item.id === post.devlog.before[0])!.name, "old.png");
@@ -68,6 +82,8 @@ test("a devlog entry records the session's commits and before/after, reusing sho
 	const summary = (await run(["devlog", "summary"])).stdout;
 	assert.match(summary, /### Thicker cape/);
 	assert.match(summary, /Reads at game size\./);
+	assert.match(summary, /Craft \(工夫\):\nPushed the cloth/);
+	assert.match(summary, /Struggle \(苦労\):\nThe hood clipped/);
 	assert.match(summary, /Before: old\.png/);
 	assert.match(summary, /feat: a thicker cape/);
 
@@ -91,4 +107,22 @@ test("transcripts are kept from the session end and by sweeping the project's fo
 	writeFile(worktreeFolder, "s-2.jsonl", "{}\n");
 	assert.match((await run(["devlog", "sweep"])).stdout, /Kept 2 transcripts/);
 	assert.ok(existsSync(join(dir, "home", "transcripts", "game", "s-2.jsonl")));
+});
+
+test("an entry without craft, struggle or before/after is recorded with a nudge", async () => {
+	const result = await run(["devlog", "add", "--title", "Faster saves", "--summary", "Saving no longer stutters."]);
+	assert.equal(result.code, 0, result.stderr);
+	assert.match(result.stdout, /No craft \(工夫\) or struggle \(苦労\) written/);
+	assert.match(result.stdout, /No before\/after pair/);
+});
+
+test("sections are split from one Markdown text, in Japanese or English", async () => {
+	const { splitSections } = await import("../src/devlog.ts");
+	assert.deepEqual(splitSections("What changed.\n\n## 工夫したこと\nA.\n### Struggle:\nB.\n## 決めたこと\nC.\n## Notes\nstill decided"), {
+		summary: "What changed.",
+		craft: "A.",
+		struggle: "B.",
+		decided: "C.\n## Notes\nstill decided",
+	});
+	assert.deepEqual(splitSections(""), { summary: undefined, craft: undefined, struggle: undefined, decided: undefined });
 });

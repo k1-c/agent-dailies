@@ -90,22 +90,36 @@ A record of how the work changed, written as you go, so that updates and devlog
 posts can be summarized later from it (no scheduled screenshots).
 
 When a piece of work is committed, look back over the session. If it changed
-something a person using the product would notice, record an entry:
+something a person using the product would notice, record an entry — these entries
+are what update videos and devlog posts are written from:
 
 ```sh
 agent-dailies devlog add --title "Thief's cape reads at game size" \
-  --before i_mupkr1c5fdf43e --after shots/cape_after.png <<'EOF'
+  --before i_mupkr1c5fdf43e --after shots/cape_after.png --summary - <<'EOF'
 The cape was a flat plate from the back; it is now thick and follows the run.
-Decided with the user: keep the darker hem (option B).
+## 工夫
+Pushed the cloth out along its normals instead of remodelling it, so the
+animation and texture stayed as they were.
+## 苦労
+The first try thickened the hood too and it clipped the horns; the user spotted
+it in the viewer, so the hood is now left out by vertex group.
+## 決めたこと
+Keep the darker hem (option B in the viewer).
 EOF
 ```
 
-- The summary (stdin with `--summary -`, or `--summary TEXT`): what changed, why,
-  and what was decided along the way.
-- Before/after only when a picture shows the change better than words. Use the
-  `i_…` ids of files you already showed (`agent-dailies context`/`list` print
-  them), or capture the "before" from the previous commit (a temporary worktree).
-  Skip refactors and fixes nobody sees.
+- **Summary** (first part): what changed for the people using it, and why.
+- **## 工夫 / craft**: what was done well or cleverly — the idea that made it work.
+- **## 苦労 / struggle**: what was hard — what failed first, what you tried, what
+  the user had you redo, what you learned. Be concrete; this is the story.
+- **## 決めたこと / decided**: decisions, with the user or yours.
+  (`--craft`, `--struggle`, `--decided` work too. Leave out a section only when
+  there truly is nothing.)
+- **Before/after are required when the change can be seen** (looks, motion, UI,
+  feel). Use the `i_…` ids of files you already showed (`agent-dailies
+  context`/`list` print them), or capture the "before" from the previous commit
+  in a temporary worktree. Only changes nobody can see go without pictures.
+  Skip refactors and fixes nobody notices.
 - Commits made this session are attached automatically (`--commits A..B` or
   `none` to override). The Stop hook reminds you once after new commits.
 
@@ -116,7 +130,8 @@ agent-dailies devlog summary            # since the last cut: entries, decisions
 agent-dailies devlog cut --name "Update 2026-10-02"   # after it went out
 ```
 
-`agent-dailies devlog list` shows recent entries; the viewer has a Devlog view.
+`agent-dailies devlog list` shows recent entries. The viewer keeps the devlog on
+its own tab (Devlog), apart from what you show for review (Dailies).
 
 ## Hear back
 

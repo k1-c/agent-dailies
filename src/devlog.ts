@@ -61,6 +61,40 @@ export function repositoryRoot(cwd: string): string | undefined {
 	return basename(common) === ".git" ? join(common, "..") : git(cwd, ["rev-parse", "--show-toplevel"]);
 }
 
+// ---- entry sections ----
+
+export interface DevlogSections {
+	summary?: string;
+	craft?: string;
+	struggle?: string;
+	decided?: string;
+}
+
+// Headings an agent (or a person) may use in one Markdown entry, in English or Japanese.
+const HEADINGS: Record<keyof DevlogSections, RegExp> = {
+	summary: /^(変わったこと|何が変わったか|変更|changed|what changed|summary)$/i,
+	craft: /^(工夫|工夫したこと|うまくいったこと|craft|ingenuity|what worked)$/i,
+	struggle: /^(苦労|苦労したこと|つまずいたこと|struggle|struggles|what was hard|hard parts)$/i,
+	decided: /^(決めたこと|決まったこと|決定|decided|decisions)$/i,
+};
+
+/** Splits "## 工夫" / "## Struggle" … sections out of one Markdown text; the rest is the summary. */
+export function splitSections(markdown: string): DevlogSections {
+	const parts: Record<keyof DevlogSections, string[]> = { summary: [], craft: [], struggle: [], decided: [] };
+	let current: keyof DevlogSections = "summary";
+	for (const line of markdown.split("\n")) {
+		const heading = /^#{1,4}\s+(.+?)\s*[:：]?\s*$/.exec(line);
+		const key = heading ? (Object.keys(HEADINGS) as (keyof DevlogSections)[]).find((name) => HEADINGS[name].test(heading[1]!.trim())) : undefined;
+		if (key) {
+			current = key;
+			continue;
+		}
+		parts[current].push(line);
+	}
+	const text = (lines: string[]) => lines.join("\n").trim() || undefined;
+	return { summary: text(parts.summary), craft: text(parts.craft), struggle: text(parts.struggle), decided: text(parts.decided) };
+}
+
 // ---- transcripts ----
 
 export function transcriptDir(store: Store, project: string): string {
@@ -201,6 +235,9 @@ export function summaryMarkdown(catalog: Catalog, store: Store, summary: Summary
 		for (const entry of group.entries) {
 			lines.push(`### ${entry.title ?? "(untitled)"} — ${entry.at.slice(0, 16)} (${entry.id})`);
 			if (entry.devlog?.summary) lines.push("", entry.devlog.summary.trim());
+			if (entry.devlog?.craft) lines.push("", "Craft (工夫):", entry.devlog.craft.trim());
+			if (entry.devlog?.struggle) lines.push("", "Struggle (苦労):", entry.devlog.struggle.trim());
+			if (entry.devlog?.decided) lines.push("", "Decided:", entry.devlog.decided.trim());
 			const before = files(entry, entry.devlog?.before ?? []);
 			const after = files(entry, entry.devlog?.after ?? []);
 			if (before.length) lines.push("", `Before: ${before.join("; ")}`);

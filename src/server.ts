@@ -237,8 +237,14 @@ export class DailiesServer {
 		return event;
 	}
 
-	counts(): { devlog: number } {
-		return { devlog: this.catalog.posts.filter((post) => post.kind === "devlog").length };
+	counts(): { devlog: number; review: number; open: number } {
+		let devlog = 0;
+		let open = 0;
+		for (const post of this.catalog.posts) {
+			if (post.kind === "devlog") devlog++;
+			else open += this.catalog.openQuestions(post).length;
+		}
+		return { devlog, review: this.catalog.posts.length - devlog, open };
 	}
 
 	/** Records what is known about an issue, unless nothing changed. */
@@ -413,21 +419,23 @@ export class DailiesServer {
 					session: param("session"),
 					q: param("q"),
 					open: url.searchParams.get("open") === "1",
-					devlog: url.searchParams.get("devlog") === "1",
-					since: param("since"),
+					kind: modeOf(url),
+					// "lastcut": the devlog since the last summary went out.
+					since: param("since") === "lastcut" ? this.catalog.lastCut()?.at : param("since"),
 					until: param("until"),
 				};
 				return sendJson(response, 200, {
 					posts: this.catalog.list(filter),
-					tree: this.catalog.tree(),
+					tree: this.catalog.tree(filter.kind),
 					counts: this.counts(),
+					cuts: filter.kind === "devlog" ? this.catalog.cuts : undefined,
 					issue: this.catalog.issue(filter.issue) ?? null,
 					selection: this.selection,
 					machine: this.store.machine,
 				});
 			}
 			case "/api/tree":
-				return sendJson(response, 200, { tree: this.catalog.tree(), counts: this.counts() });
+				return sendJson(response, 200, { tree: this.catalog.tree(modeOf(url)), counts: this.counts() });
 			case "/api/issue": {
 				const key = url.searchParams.get("key") ?? "";
 				return sendJson(response, 200, { issue: this.catalog.issue(key) ?? null });
@@ -550,6 +558,12 @@ export class DailiesServer {
 		this.clients.add(response);
 		request.on("close", () => this.clients.delete(response));
 	}
+}
+
+// The page has two sides: what agents show for review ("dailies"), and the devlog.
+function modeOf(url: URL): "devlog" | "review" | undefined {
+	const mode = url.searchParams.get("mode");
+	return mode === "devlog" ? "devlog" : mode === "dailies" ? "review" : undefined;
 }
 
 function author(value: unknown): Author {

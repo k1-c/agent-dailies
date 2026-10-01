@@ -88,8 +88,14 @@ export interface CommitRef {
  * shows the change better than words.
  */
 export interface DevlogInfo {
-	/** Markdown. */
+	/** What changed for the people using it, and why. Markdown. */
 	summary?: string;
+	/** 工夫: what was done well or cleverly, the idea that made it work. Markdown. */
+	craft?: string;
+	/** 苦労: what was hard — what failed first, what was tried, what was learned. Markdown. */
+	struggle?: string;
+	/** What was decided along the way, and by whom. Markdown. */
+	decided?: string;
 	/** Item ids of the post showing how it was, and how it is now. */
 	before: string[];
 	after: string[];
@@ -191,8 +197,8 @@ export interface ListFilter {
 	q?: string;
 	/** Only posts with questions still unanswered. */
 	open?: boolean;
-	/** Only devlog entries. */
-	devlog?: boolean;
+	/** Only devlog entries ("devlog"), or only what was shown for review ("review"). */
+	kind?: "devlog" | "review";
 	/** Only posts at or after / before these times. */
 	since?: string;
 	until?: string;
@@ -399,6 +405,9 @@ export function buildPost(input: PostInput, machine: string, at: Date = new Date
 		devlog: devlog
 			? {
 					summary: input.devlog?.summary || undefined,
+					craft: input.devlog?.craft || undefined,
+					struggle: input.devlog?.struggle || undefined,
+					decided: input.devlog?.decided || undefined,
 					before: input.devlog?.before ?? [],
 					after: input.devlog?.after ?? [],
 					commits: input.devlog?.commits ?? [],
@@ -535,7 +544,8 @@ export class Catalog {
 		if (filter.issue && post.issue?.toLowerCase() !== filter.issue.toLowerCase()) return false;
 		if (filter.session && post.session !== filter.session) return false;
 		if (filter.open && !this.openQuestions(post).length) return false;
-		if (filter.devlog && post.kind !== "devlog") return false;
+		if (filter.kind === "devlog" && post.kind !== "devlog") return false;
+		if (filter.kind === "review" && post.kind === "devlog") return false;
 		if (filter.since && post.at < filter.since) return false;
 		if (filter.until && post.at > filter.until) return false;
 		if (filter.q) {
@@ -544,6 +554,9 @@ export class Catalog {
 				post.title,
 				post.note,
 				post.devlog?.summary,
+				post.devlog?.craft,
+				post.devlog?.struggle,
+				post.devlog?.decided,
 				post.issue,
 				post.lane,
 				post.branch,
@@ -587,11 +600,13 @@ export class Catalog {
 	}
 
 	/** Repositories → issues (or branches) → agent sessions, most recently active first. */
-	tree(): ProjectNode[] {
+	tree(kind?: "devlog" | "review"): ProjectNode[] {
 		const projects = new Map<string, ProjectNode>();
 		const groups = new Map<string, GroupNode>();
 		const sessions = new Map<string, SessionNode>();
 		for (const post of this.posts) {
+			if (kind === "devlog" && post.kind !== "devlog") continue;
+			if (kind === "review" && post.kind === "devlog") continue;
 			const open = this.openQuestions(post).length;
 			const project = projects.get(post.project) ?? { project: post.project, last: post.at, groups: [] };
 			project.last = post.at;

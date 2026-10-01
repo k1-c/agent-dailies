@@ -179,3 +179,20 @@ test("the tree groups posts by repository, issue or branch, and session", async 
 	assert.equal(titleFromBranch("me/summ-7-blue-capes", "SUMM-7"), "blue capes");
 	assert.equal(titleFromBranch("main", "SUMM-7"), undefined);
 });
+
+test("review and devlog posts are listed and grouped apart", async () => {
+	const dir = tempDir();
+	const store = new Store(join(dir, "home"), "m");
+	const item = await store.addFile(writeFile(dir, "a.png", PNG));
+	store.append(buildPost({ project: "p", lane: "summ-1", issue: "SUMM-1", title: "Shown", items: [item] }, "m", new Date("2026-10-01T00:00:00Z")));
+	store.append(
+		buildPost({ project: "p", lane: "summ-2", issue: "SUMM-2", title: "Logged", items: [], kind: "devlog", devlog: { summary: "x", craft: "y", before: [], after: [], commits: [] } }, "m", new Date("2026-10-01T00:01:00Z")),
+	);
+	const catalog = store.load();
+	assert.deepEqual(catalog.list({ kind: "review" }).map((post) => post.title), ["Shown"]);
+	assert.deepEqual(catalog.list({ kind: "devlog" }).map((post) => post.title), ["Logged"]);
+	assert.equal(catalog.list({ kind: "devlog" })[0]!.devlog?.craft, "y");
+	assert.deepEqual(catalog.tree("review")[0]!.groups.map((group) => group.issue), ["SUMM-1"]);
+	assert.deepEqual(catalog.tree("devlog")[0]!.groups.map((group) => group.issue), ["SUMM-2"]);
+	assert.deepEqual(catalog.list({ q: "y" }).map((post) => post.title), ["Logged"]);
+});

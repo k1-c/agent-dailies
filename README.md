@@ -29,8 +29,10 @@ yesterday's renders and decides what to keep.
   branches) → agent sessions, newest activity first, with unread dots, counts and
   questions waiting; pick one to see just its posts, or search titles, files and
   issues. Posts carry the issue key from the branch name (`summ-239` → `SUMM-239`).
-- **Devlog** — when work is committed, the agent looks back and records what
-  changed (with before/after only when a picture helps); later,
+- **Devlog** — on its own tab, apart from the review feed. When work is
+  committed, the agent looks back and records what changed, what worked (工夫),
+  what was hard (苦労) and what was decided, with before/after whenever the change
+  can be seen; later,
   `agent-dailies devlog summary` gathers everything since the last update —
   entries, decisions, commits, Claude Code transcripts (kept in the store before
   Claude Code deletes them) — to write the next one from.
@@ -163,15 +165,23 @@ stored copy, so the name is right and no space is used.
 ### Devlog
 
 ```sh
-agent-dailies devlog add --title "What changed" --summary - --before old.png --after new.png <<'EOF'
-Why it changed and what was decided.
+agent-dailies devlog add --title "What changed" --before old.png --after new.png --summary - <<'EOF'
+What changed for the people using it, and why.
+## 工夫
+What worked — the idea that made it work.
+## 苦労
+What was hard: what failed first, what was tried.
+## 決めたこと
+What was decided.
 EOF
 agent-dailies devlog summary                      # material since the last cut
 agent-dailies devlog cut --name "Update 2026-10-02"
 ```
 
-Before/after take files or the ids (`i_…`) of files already shown. Commits the
-session made are attached. The Stop hook suggests an entry once after new
+Sections may also be given as `--craft`, `--struggle`, `--decided` (English
+headings "Craft", "Struggle", "Decided" work too). Before/after take files or the
+ids (`i_…`) of files already shown, and are expected whenever the change can be
+seen. Commits the session made are attached. The Stop hook suggests an entry once after new
 commits; the agent decides whether one is worth it. Transcripts are copied at
 session start and end (`agent-dailies devlog sweep` by hand).
 

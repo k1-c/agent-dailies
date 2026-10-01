@@ -10,7 +10,7 @@ import { dirname, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import * as config from "./config.ts";
 import { baseUrl, Client, ensureServer, openBrowser } from "./client.ts";
-import { collect, commitsBetween, headOf, keepTranscript, repositoryRoot, summaryMarkdown, transcriptDir } from "./devlog.ts";
+import { collect, commitsBetween, headOf, keepTranscript, repositoryRoot, splitSections, summaryMarkdown, transcriptDir } from "./devlog.ts";
 import { describeAnswer, describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
 import { guideText, preToolUse } from "./hook.ts";
 import { dueForRefresh, fetchIssue, ISSUE_KEY, issueCommandFor, markFetched, sameIssue, type IssueInfo } from "./issues.ts";
@@ -752,10 +752,14 @@ async function watch(args: string[]): Promise<void> {
 // ---- devlog ----
 
 const DEVLOG_HELP = `Usage:
-  agent-dailies devlog add --title T [--summary TEXT|-] [--before FILE|ITEM…] [--after FILE|ITEM…] [FILE…]
+  agent-dailies devlog add --title T --summary TEXT|- [--craft TEXT] [--struggle TEXT] [--decided TEXT]
+                           [--before FILE|ITEM…] [--after FILE|ITEM…] [FILE…]
                            [--issue KEY] [--commits auto|none|A..B] [--open] [--json]
-      Record what changed (look back over the session first). Before/after take files or the ids of
-      files already shown (i_…). Commits default to the ones this session made.
+      Record what changed, looking back over the session: what changed for the people using it and
+      why (summary), what was done well (craft, 工夫), what was hard — what failed first, what was
+      tried (struggle, 苦労), and what was decided. The summary may carry these as "## 工夫",
+      "## 苦労", "## 決めたこと" sections instead. Before/after (required when the change can be
+      seen) take files or the ids of files already shown (i_…). Commits default to this session's.
   agent-dailies devlog list [--since 7d|DATE] [--all] [--json]
   agent-dailies devlog summary [--since cut|7d|DATE] [--until DATE] [--all] [--json]
       Everything recorded since the last cut (or the given time): entries, decisions, commits,
@@ -790,6 +794,9 @@ async function devlogAdd(args: string[]): Promise<void> {
 		options: {
 			...WHERE_OPTIONS,
 			summary: { type: "string", short: "s" },
+			craft: { type: "string" },
+			struggle: { type: "string" },
+			decided: { type: "string" },
 			before: { type: "boolean" },
 			after: { type: "boolean" },
 			commits: { type: "string" },
@@ -807,7 +814,12 @@ async function devlogAdd(args: string[]): Promise<void> {
 		if (token.kind === "option" && (token.name === "before" || token.name === "after")) bucket = token.name;
 		else if (token.kind === "positional") refs[bucket].push(token.value);
 	}
-	const summary = values.summary === "-" ? readFileSync(0, "utf8") : (values.summary as string | undefined);
+	const raw = values.summary === "-" ? readFileSync(0, "utf8") : (values.summary as string | undefined);
+	const sections = splitSections(raw ?? "");
+	const summary = sections.summary;
+	const craft = (values.craft as string | undefined) ?? sections.craft;
+	const struggle = (values.struggle as string | undefined) ?? sections.struggle;
+	const decided = (values.decided as string | undefined) ?? sections.decided;
 	if (!values.title && !summary) throw new Error(`a devlog entry needs --title or --summary\n\n${DEVLOG_HELP}`);
 	const items: Item[] = [];
 	const ids: Record<"before" | "after", string[]> = { before: [], after: [] };
@@ -822,13 +834,18 @@ async function devlogAdd(args: string[]): Promise<void> {
 	const commits = sessionCommits(target, where, (values.commits as string | undefined) ?? "auto");
 	const input = postInput({ ...values, "no-open": !values.open }, items, {
 		kind: "devlog",
-		devlog: { summary, before: ids.before, after: ids.after, commits },
+		devlog: { summary, craft, struggle, decided, before: ids.before, after: ids.after, commits },
 	});
 	const published = await publish(target, input, { ...values, "no-open": !values.open });
 	if (values.json) return out(JSON.stringify({ post: published.post, url: published.url }, null, 2));
 	const lines = [`Recorded a devlog entry: ${published.url}`];
 	if (ids.before.length || ids.after.length) lines.push(`  before ${ids.before.length} · after ${ids.after.length}`);
 	if (commits.length) lines.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}: ${commits.map((commit) => commit.sha.slice(0, 8)).join(" ")}`);
+	const missing = [!craft && "craft (工夫)", !struggle && "struggle (苦労)"].filter(Boolean);
+	if (missing.length) lines.push(`No ${missing.join(" or ")} written. If there was any, add it: these are what devlog videos are made of.`);
+	if (!ids.before.length || !ids.after.length) {
+		lines.push("No before/after pair. If the change can be seen (looks, motion, UI, feel), add both: --before <file|i_…> --after <file|i_…>.");
+	}
 	out(lines.join("\n"));
 }
 
@@ -847,7 +864,7 @@ async function devlog(args: string[]): Promise<void> {
 			const { values } = parse(rest, { since: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
 			const where = detectWhere();
 			const entries = target.load().list({
-				devlog: true,
+				kind: "devlog",
 				since: since(values.since as string | undefined, 30 * 86_400_000),
 				...(values.all ? {} : { project: where.project }),
 			});
@@ -1002,11 +1019,18 @@ function devlogReminder(target: Store, catalog: Catalog, session: string, cwd: s
 		[
 			`This session has made ${commits.length} commit${commits.length === 1 ? "" : "s"} since it began (latest: ${commits[0]!.subject}).`,
 			"Look back over the session: if the change is something a person using the product would notice, record it —",
-			`  agent-dailies devlog add --title "<what changed>" --summary - [--before <file|i_…>…] [--after <file|i_…>…] <<'EOF'`,
-			"  <what changed, why, and what was decided along the way>",
+			`  agent-dailies devlog add --title "<what changed>" --before <file|i_…> --after <file|i_…> --summary - <<'EOF'`,
+			"  <what changed for the people using it, and why>",
+			"  ## 工夫",
+			"  <what was done well or cleverly — the idea that made it work>",
+			"  ## 苦労",
+			"  <what was hard: what failed first, what you tried, what the user had you redo, what you learned>",
+			"  ## 決めたこと",
+			"  <what was decided, with the user or by you>",
 			"  EOF",
-			"Add before/after only when a picture shows the change better than words (reuse files you showed with their i_… ids,",
-			"or capture the before from the previous commit). Skip refactors and fixes nobody sees. If nothing is worth recording, just finish.",
+			"Before/after are required when the change can be seen (looks, motion, UI, feel): reuse files you showed (their i_… ids)",
+			"or capture the before from the previous commit in a temporary worktree. Leave out sections that truly have nothing.",
+			"Skip refactors and fixes nobody notices. If nothing is worth recording, just finish.",
 		].join("\n") + "\n",
 	);
 	process.exitCode = 2;
