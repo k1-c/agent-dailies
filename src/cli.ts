@@ -4,13 +4,14 @@
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import * as config from "./config.ts";
 import { baseUrl, Client, ensureServer, openBrowser } from "./client.ts";
 import { collect, commitsBetween, headOf, keepTranscript, repositoryRoot, splitSections, summaryMarkdown, transcriptDir } from "./devlog.ts";
+import { isOnMain, landedWork, mainBranch, noteCommand, unmergedWork } from "./landed.ts";
 import { describeAnswer, describeFeedback, hasMessage, markDelivered, orphanedIn, pendingFor, postedBy, readSession, writeSession } from "./feedback.ts";
 import { guideText, preToolUse } from "./hook.ts";
 import { dueForRefresh, fetchIssue, ISSUE_KEY, issueCommandFor, markFetched, sameIssue, type IssueInfo } from "./issues.ts";
@@ -32,7 +33,7 @@ import {
 	type Selection,
 	type VerdictEvent,
 } from "./store.ts";
-import { detectWhere } from "./where.ts";
+import { detectWhere, issueFromBranch } from "./where.ts";
 
 const HELP = `agent-dailies ${config.version()} — a live review page for what your coding agent makes
 
@@ -759,7 +760,10 @@ const DEVLOG_HELP = `Usage:
       why (summary), what was done well (craft, 工夫), what was hard — what failed first, what was
       tried (struggle, 苦労), and what was decided. The summary may carry these as "## 工夫",
       "## 苦労", "## 決めたこと" sections instead. Before/after (required when the change can be
-      seen) take files or the ids of files already shown (i_…). Commits default to this session's.
+      seen or heard) take files — images, or videos for motion, feel and sound — or the ids of
+      files already shown (i_…). Only merged work is recorded: by default the session's commits
+      that have landed on the main branch (and not in an entry yet) are attached, and their issue
+      from the merged branch; work still on a branch is refused until it is merged.
   agent-dailies devlog list [--since 7d|DATE] [--all] [--json]
   agent-dailies devlog summary [--since cut|7d|DATE] [--until DATE] [--all] [--json]
       Everything recorded since the last cut (or the given time): entries, decisions, commits,
@@ -777,15 +781,48 @@ async function itemFrom(target: Store, catalog: Catalog, ref: string): Promise<I
 	return target.addFile(resolve(ref));
 }
 
-function sessionCommits(target: Store, where: ReturnType<typeof detectWhere>, mode: string): CommitRef[] {
-	if (mode === "none") return [];
+// The commits an entry is about. Devlog entries cover only work on the main
+// branch: by default the session's merged work not yet in any entry; an explicit
+// range must be on the main branch too. Unmerged work is refused, not recorded.
+function entryCommits(
+	target: Store,
+	catalog: Catalog,
+	where: ReturnType<typeof detectWhere>,
+	mode: string,
+): { commits: CommitRef[]; refs: string[]; notes: string[] } {
+	if (mode === "none") return { commits: [], refs: [], notes: [] };
 	const cwd = where.cwd ?? process.cwd();
+	const repo = repositoryRoot(cwd);
+	if (!repo) return { commits: [], refs: [], notes: [] };
+	const main = mainBranch(cwd);
+	const later = "Devlog entries cover only work merged into the main branch: record it after the user has approved the merge and it has gone through.";
 	if (mode.includes("..")) {
 		const [from, to] = mode.split("..");
-		return commitsBetween(cwd, from!, to || "HEAD");
+		const commits = commitsBetween(cwd, from!, to || "HEAD");
+		const off = commits.filter((commit) => !isOnMain(cwd, commit.sha, main));
+		if (off.length) {
+			throw new Error(`${off.length} of these commits are not on ${main ?? "the main branch"} yet (${off.map((commit) => commit.sha.slice(0, 8)).join(" ")}).
+${later}`);
+		}
+		return { commits, refs: [], notes: [] };
 	}
-	const start = where.session ? readSession(target, where.session).start : undefined;
-	return start?.head ? commitsBetween(cwd, start.head) : [];
+	const recorded = new Set(catalog.posts.filter((post) => post.kind === "devlog").flatMap((post) => (post.devlog?.commits ?? []).map((commit) => commit.sha)));
+	const state = where.session ? readSession(target, where.session) : {};
+	const landed = landedWork(state, repo)[0];
+	const commits = (landed?.commits ?? []).filter((commit) => !recorded.has(commit.sha));
+	const pending = unmergedWork(cwd);
+	const notes = pending ? [`${pending.commits.length} commit${pending.commits.length === 1 ? "" : "s"} on ${pending.branch} ${pending.commits.length === 1 ? "is" : "are"} not on ${pending.main} yet and left out; record ${pending.commits.length === 1 ? "it" : "them"} after the merge.`] : [];
+	if (!commits.length) {
+		const why = pending
+			? `This session's work on ${pending.branch} is not on ${pending.main} yet.`
+			: landed
+				? `Everything this session merged is already in a devlog entry.`
+				: `This session has not merged anything into ${main ?? "the main branch"} yet (no merge, and no commit on it, was seen).`;
+		throw new Error(`${why}
+${later}
+If it was merged some other way, pass --commits <from>..<to>; for work without commits, --commits none.`);
+	}
+	return { commits, refs: landed?.refs ?? [], notes };
 }
 
 async function devlogAdd(args: string[]): Promise<void> {
@@ -831,7 +868,14 @@ async function devlogAdd(args: string[]): Promise<void> {
 		}
 	}
 	const where = detectWhere();
-	const commits = sessionCommits(target, where, (values.commits as string | undefined) ?? "auto");
+	const { commits, refs: merged, notes } = entryCommits(target, catalog, where, (values.commits as string | undefined) ?? "auto");
+	// Recorded from the main checkout after a merge, the branch no longer names the
+	// issue: take it from the branch that was merged.
+	if (!values.issue && !where.issue) {
+		const keys = [...new Set(merged.map((ref) => issueFromBranch(ref)).filter((key): key is string => Boolean(key)))];
+		if (keys.length === 1) values.issue = keys[0];
+		else if (!keys.length && merged.length === 1 && !values.lane) values.lane = merged[0];
+	}
 	const input = postInput({ ...values, "no-open": !values.open }, items, {
 		kind: "devlog",
 		devlog: { summary, craft, struggle, decided, before: ids.before, after: ids.after, commits },
@@ -841,10 +885,14 @@ async function devlogAdd(args: string[]): Promise<void> {
 	const lines = [`Recorded a devlog entry: ${published.url}`];
 	if (ids.before.length || ids.after.length) lines.push(`  before ${ids.before.length} · after ${ids.after.length}`);
 	if (commits.length) lines.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}: ${commits.map((commit) => commit.sha.slice(0, 8)).join(" ")}`);
+	lines.push(...notes);
 	const missing = [!craft && "craft (工夫)", !struggle && "struggle (苦労)"].filter(Boolean);
 	if (missing.length) lines.push(`No ${missing.join(" or ")} written. If there was any, add it: these are what devlog videos are made of.`);
 	if (!ids.before.length || !ids.after.length) {
-		lines.push("No before/after pair. If the change can be seen (looks, motion, UI, feel), add both: --before <file|i_…> --after <file|i_…>.");
+		lines.push(
+			"No before/after pair. If the change can be seen or heard (looks, UI, motion, feel, sound), add both: --before <file|i_…> --after <file|i_…>",
+			"(images, or short videos when the change is in motion, timing, feel or sound).",
+		);
 	}
 	out(lines.join("\n"));
 }
@@ -1001,25 +1049,32 @@ interface HookInput {
 
 const REMIND_WITHIN_MS = 12 * 3_600_000;
 
-// Once per new commit: if this session has committed since it began and has not
-// recorded a devlog entry since, suggest looking back. The agent decides whether
-// the change is worth an entry; the hook only makes sure it is considered.
-function devlogReminder(target: Store, catalog: Catalog, session: string, cwd: string): boolean {
+// Once per landing: when work this session merged into the main branch (or
+// committed on it) has gone through and is in no devlog entry yet, suggest
+// looking back. Nothing is suggested for work still on a branch: devlog entries
+// cover only merged work. The agent decides whether the change is worth an entry.
+function devlogReminder(target: Store, catalog: Catalog, session: string): boolean {
 	if (process.env.AGENT_DAILIES_DEVLOG === "0") return false;
 	const state = readSession(target, session);
-	const head = headOf(cwd);
-	if (!state.start?.head || !head || head === state.start.head || state.devlogReminded === head) return false;
-	const commits = commitsBetween(cwd, state.start.head, head);
-	if (!commits.length) return false;
-	writeSession(target, session, { devlogReminded: head });
-	const latestCommit = commits[0]!.at ?? "";
-	const recorded = catalog.posts.some((post) => post.kind === "devlog" && post.session === session && post.at >= latestCommit);
-	if (recorded) return false;
+	if (!state.merges?.length && !state.direct?.length) return false;
+	const recorded = new Set(catalog.posts.filter((post) => post.kind === "devlog").flatMap((post) => (post.devlog?.commits ?? []).map((commit) => commit.sha)));
+	const reminded = new Set(state.devlogRemindedFor ?? []);
+	const fresh = landedWork(state)
+		.map((landed) => ({ ...landed, commits: landed.commits.filter((commit) => !recorded.has(commit.sha) && !reminded.has(commit.sha)) }))
+		.filter((landed) => landed.commits.length);
+	if (!fresh.length) return false;
+	writeSession(target, session, { devlogRemindedFor: [...reminded, ...fresh.flatMap((landed) => landed.commits.map((commit) => commit.sha))] });
+	const landedLines = fresh.map(
+		(landed) =>
+			`  ${basename(landed.repo)}: ${landed.commits.length} commit${landed.commits.length === 1 ? "" : "s"} on ${landed.main}${landed.refs.length ? ` from ${landed.refs.join(", ")}` : ""} (latest: ${landed.commits[0]!.subject})`,
+	);
 	process.stderr.write(
 		[
-			`This session has made ${commits.length} commit${commits.length === 1 ? "" : "s"} since it began (latest: ${commits[0]!.subject}).`,
-			"Look back over the session: if the change is something a person using the product would notice, record it —",
-			`  agent-dailies devlog add --title "<what changed>" --before <file|i_…> --after <file|i_…> --summary - <<'EOF'`,
+			"Work from this session has landed on the main branch:",
+			...landedLines,
+			"Look back over the session: if the change is something a person using the product would notice, record it now",
+			"(run it in that repository; the merged commits and their issue are attached) —",
+			`  agent-dailies devlog add --title "<what changed>" --before <image|video|i_…> --after <image|video|i_…> --summary - <<'EOF'`,
 			"  <what changed for the people using it, and why>",
 			"  ## 工夫",
 			"  <what was done well or cleverly — the idea that made it work>",
@@ -1028,9 +1083,10 @@ function devlogReminder(target: Store, catalog: Catalog, session: string, cwd: s
 			"  ## 決めたこと",
 			"  <what was decided, with the user or by you>",
 			"  EOF",
-			"Before/after are required when the change can be seen (looks, motion, UI, feel): reuse files you showed (their i_… ids)",
-			"or capture the before from the previous commit in a temporary worktree. Leave out sections that truly have nothing.",
-			"Skip refactors and fixes nobody notices. If nothing is worth recording, just finish.",
+			"Before/after are required when the change can be seen or heard: images, or short videos when the change is in motion,",
+			"timing, feel or sound. Reuse files you showed (their i_… ids) or capture the before from the commit before the merge",
+			"in a temporary worktree. Leave out sections that truly have nothing. Skip refactors and fixes nobody notices.",
+			"If nothing is worth recording, just finish.",
 		].join("\n") + "\n",
 	);
 	process.exitCode = 2;
@@ -1051,6 +1107,16 @@ async function hook(args: string[]): Promise<void> {
 	const target = store();
 	switch (kind) {
 		case "pre-tool-use": {
+			// Note merges and commits on the main branch before they run (see landed.ts).
+			const command = (input.tool_input as { command?: unknown } | undefined)?.command;
+			if (input.session_id && typeof command === "string") {
+				try {
+					const noted = noteCommand(command, input.cwd || process.cwd(), readSession(target, input.session_id));
+					if (noted) writeSession(target, input.session_id, noted);
+				} catch {
+					// Never let the bookkeeping get in the way of the command.
+				}
+			}
 			const decision = preToolUse(input);
 			if (decision.block) {
 				process.stderr.write(`${decision.message}\n`);
@@ -1109,7 +1175,7 @@ async function hook(args: string[]): Promise<void> {
 			const catalog = target.load();
 			const shown = postedBy(catalog, session);
 			if (!shown.length) {
-				if (!input.stop_hook_active) devlogReminder(target, catalog, session, input.cwd || process.cwd());
+				if (!input.stop_hook_active) devlogReminder(target, catalog, session);
 				return;
 			}
 			const pending = pendingFor(catalog, target, session);
@@ -1120,7 +1186,7 @@ async function hook(args: string[]): Promise<void> {
 				return;
 			}
 			if (input.stop_hook_active) return;
-			if (devlogReminder(target, catalog, session, input.cwd || process.cwd())) return;
+			if (devlogReminder(target, catalog, session)) return;
 			if (process.env.AGENT_DAILIES_AUTO_WATCH === "0") return;
 			const latest = postedBy(catalog, session, REMIND_WITHIN_MS).at(-1);
 			if (!latest || readSession(target, session).reminded === latest.id) return;

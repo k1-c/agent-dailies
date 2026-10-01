@@ -2,10 +2,12 @@
 // that summaries ("what happened since the last update") can be written later
 // from it — without fixed-point screenshots taken on a schedule.
 //
-// - At the end of a piece of work the agent looks back over its session and,
-//   when something changed that a person would notice, records a devlog entry
-//   (a post of kind "devlog"): what changed and why, the commits, and
-//   before/after files when a picture shows it better than words.
+// - When a piece of work has been merged into the main branch, the agent looks
+//   back over its session and, when something changed that a person would
+//   notice, records a devlog entry (a post of kind "devlog"): what changed and
+//   why, what worked and what was hard, the merged commits, and before/after
+//   files (images, or videos for motion, feel and sound). Work still on a branch
+//   is not recorded (landed.ts).
 // - The Claude Code transcripts of the sessions are copied into the store, as
 //   Claude Code deletes them after a while; summaries can point into them.
 // - A cut marks where the last summary (an update video, a post) ended; the

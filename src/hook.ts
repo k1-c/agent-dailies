@@ -152,17 +152,22 @@ images, videos, models or pages you made; sign off on how something looks):
   is answered (or the user comments), which wakes you. Act on them.
 
 Devlog — a record of how the work changed, for updates and devlog videos later:
-- When a piece of work is committed, look back over the session. If it changed
-  something a person using the product would notice, record it with
+- Only merged work goes in: when work has landed on the main branch (the user
+  approved the merge and it went through — not at each commit on a branch), look
+  back over the session. If it changed something a person using the product would
+  notice, record it with
   \`agent-dailies devlog add --title "<what changed>" --before <…> --after <…> --summary -\`
   and on stdin: what changed and why, then "## 工夫" (what was done well or
   cleverly), "## 苦労" (what was hard: what failed first, what was tried, what the
   user had redone, what was learned) and "## 決めたこと" (decisions). The craft and
   the struggles are what devlog videos are made of — write them concretely.
-- Before/after are required when the change can be seen (looks, motion, UI, feel):
-  reuse files you showed (their i_… ids) or capture the "before" from the previous
-  commit in a temporary worktree. Only changes nobody can see go without pictures.
-  Skip refactors nobody notices. The Stop hook reminds you once after new commits.
+- Before/after are required when the change can be seen or heard: images, or short
+  videos when it is in motion, timing, feel or sound. Reuse files you showed (their
+  i_… ids) or capture the "before" from the commit before the merge in a temporary
+  worktree. Only changes nobody can see go without them. Skip refactors nobody
+  notices. The merged commits and their issue are attached; \`devlog add\` refuses
+  work that is not on the main branch yet. The Stop hook reminds you once after a
+  merge lands.
 - To write an update ("what happened since the last one"), read
   \`agent-dailies devlog summary\` (entries, decisions, commits, transcripts since
   the last cut), write from it, then \`agent-dailies devlog cut --name "<what went out>"\`.

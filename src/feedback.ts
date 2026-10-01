@@ -11,6 +11,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { DirectRecord, MergeRecord } from "./landed.ts";
 import type { AnswerEvent, Catalog, CommentEvent, PostEvent, Store, VerdictEvent } from "./store.ts";
 
 export type Feedback = VerdictEvent | CommentEvent | AnswerEvent;
@@ -26,8 +27,11 @@ interface SessionState {
 	reminded?: string;
 	/** Where the session began: its commits are the ones after `head`. */
 	start?: { at: string; head?: string; cwd?: string };
-	/** The commit the Stop hook last suggested a devlog entry for. */
-	devlogReminded?: string;
+	/** Merges the session ran and commits it made on the main branch (see landed.ts). */
+	merges?: MergeRecord[];
+	direct?: DirectRecord[];
+	/** Landed commits the Stop hook has already suggested a devlog entry for. */
+	devlogRemindedFor?: string[];
 }
 
 export function readSession(store: Store, session: string): SessionState {

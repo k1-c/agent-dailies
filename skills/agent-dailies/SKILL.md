@@ -92,13 +92,16 @@ Ask again (a new post) for the next round.
 A record of how the work changed, written as you go, so that updates and devlog
 posts can be summarized later from it (no scheduled screenshots).
 
-When a piece of work is committed, look back over the session. If it changed
-something a person using the product would notice, record an entry — these entries
-are what update videos and devlog posts are written from:
+**Only merged work goes in.** Record an entry when work has landed on the main
+branch — after the user approved the merge and it went through — not at each commit
+on a branch (work on a branch may still change or be dropped). Then look back over
+the session. If it changed something a person using the product would notice,
+record an entry — these entries are what update videos and devlog posts are written
+from:
 
 ```sh
 agent-dailies devlog add --title "Thief's cape reads at game size" \
-  --before i_mupkr1c5fdf43e --after shots/cape_after.png --summary - <<'EOF'
+  --before i_mupkr1c5fdf43e --after shots/cape_after.png shots/cape_run.mp4 --summary - <<'EOF'
 The cape was a flat plate from the back; it is now thick and follows the run.
 ## 工夫
 Pushed the cloth out along its normals instead of remodelling it, so the
@@ -118,13 +121,16 @@ EOF
 - **## 決めたこと / decided**: decisions, with the user or yours.
   (`--craft`, `--struggle`, `--decided` work too. Leave out a section only when
   there truly is nothing.)
-- **Before/after are required when the change can be seen** (looks, motion, UI,
-  feel). Use the `i_…` ids of files you already showed (`agent-dailies
-  context`/`list` print them), or capture the "before" from the previous commit
-  in a temporary worktree. Only changes nobody can see go without pictures.
-  Skip refactors and fixes nobody notices.
-- Commits made this session are attached automatically (`--commits A..B` or
-  `none` to override). The Stop hook reminds you once after new commits.
+- **Before/after are required when the change can be seen or heard.** Images for
+  how it looks; short videos (or several files) when the change is in motion,
+  timing, feel or sound — a still cannot show those. Use the `i_…` ids of files
+  you already showed (`agent-dailies context`/`list` print them), or capture the
+  "before" from the commit before the merge in a temporary worktree. Only changes
+  nobody can see or hear go without them. Skip refactors and fixes nobody notices.
+- The session's merged commits are attached automatically, with the issue of the
+  merged branch, and `devlog add` refuses work that is not on the main branch yet
+  (`--commits A..B` must be on it too; `none` for work without commits). The Stop
+  hook reminds you once after a merge lands — that is the moment to record.
 
 To write an update or a devlog post ("since the last one"):
 

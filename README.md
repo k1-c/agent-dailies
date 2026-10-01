@@ -29,10 +29,11 @@ yesterday's renders and decides what to keep.
   branches) → agent sessions, newest activity first, with unread dots, counts and
   questions waiting; pick one to see just its posts, or search titles, files and
   issues. Posts carry the issue key from the branch name (`summ-239` → `SUMM-239`).
-- **Devlog** — on its own tab, apart from the review feed. When work is
-  committed, the agent looks back and records what changed, what worked (工夫),
-  what was hard (苦労) and what was decided, with before/after whenever the change
-  can be seen; later,
+- **Devlog** — on its own tab, apart from the review feed. When work has been
+  merged into the main branch (never before), the agent looks back and records
+  what changed, what worked (工夫), what was hard (苦労) and what was decided, with
+  before/after — images, or videos for motion and sound — whenever the change can
+  be seen or heard; later,
   `agent-dailies devlog summary` gathers everything since the last update —
   entries, decisions, commits, Claude Code transcripts (kept in the store before
   Claude Code deletes them) — to write the next one from.
@@ -181,9 +182,12 @@ agent-dailies devlog cut --name "Update 2026-10-02"
 
 Sections may also be given as `--craft`, `--struggle`, `--decided` (English
 headings "Craft", "Struggle", "Decided" work too). Before/after take files or the
-ids (`i_…`) of files already shown, and are expected whenever the change can be
-seen. Commits the session made are attached. The Stop hook suggests an entry once after new
-commits; the agent decides whether one is worth it. Transcripts are copied at
+ids (`i_…`) of files already shown — images, or videos for motion and sound — and
+are expected whenever the change can be seen or heard. Only merged work is recorded:
+the PreToolUse hook notes the merges a session runs (and commits it makes straight
+on the main branch); once a merge has landed, its commits and the merged branch's
+issue are attached, and `devlog add` refuses work still on a branch. The Stop hook
+suggests an entry once after a merge lands; the agent decides whether one is worth it. Transcripts are copied at
 session start and end (`agent-dailies devlog sweep` by hand).
 
 ### Issue summaries
