@@ -3,7 +3,7 @@
 ## Commands
 
 ```sh
-npm install
+npm run setup      # installs the dev tooling into dev/ (the tool itself needs nothing)
 npm test            # node --test over test/**/*.test.ts (Node runs the TypeScript directly)
 npm run typecheck
 npm run verify      # typecheck + test + build; run before every commit

@@ -149,7 +149,7 @@ network you trust.
 ## Develop
 
 ```sh
-npm install       # TypeScript and types for checking; the tool itself has no dependencies
+npm run setup     # TypeScript and types into dev/; the tool itself has no dependencies
 npm test          # node --test, TypeScript run directly by Node
 npm run verify    # typecheck, test, build
 bin/agent-dailies show some.png
@@ -158,6 +158,8 @@ bin/agent-dailies show some.png
 The 3D viewer ([model-viewer](https://github.com/google/model-viewer), with
 three.js and Lit) is vendored in `web/vendor/` so the page works offline; their
 licenses are in `web/vendor/licenses/`. `npm run vendor` refreshes it.
+Development tooling lives in `dev/package.json`, not the root one: Claude Code runs `npm install`
+on a plugin that has dependencies, and this plugin needs none.
 
 ## License
 
