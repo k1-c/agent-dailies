@@ -976,7 +976,7 @@
 				const inside = scope.kind === "session" && scopeGroupId() === group.id;
 				const open = expanded.has(group.id) || inside || active || Boolean(query);
 				const caret = el("span", {
-					class: `side-caret${group.sessions.length ? "" : " empty"}`,
+					class: `side-caret${group.sessions.length ? "" : " no-sessions"}`,
 					text: group.sessions.length ? (open ? "▾" : "▸") : "",
 					onclick: (event) => {
 						event.stopPropagation();
