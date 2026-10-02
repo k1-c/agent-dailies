@@ -63,15 +63,20 @@ test("show starts the viewer, and a comment wakes watch", async () => {
 
 test("ask posts a question, and wait exits with the answer", async () => {
 	const image = writeFile(dir, "option.png", PNG);
-	const asked = await run(["ask", "Keep this one?", image, "--option", "No, redo it", "--json"]);
+	const asked = await run(["ask", "Keep this one?", "--about", image, "--option", "Keep it", "--option", "No, redo it", "--json"]);
 	assert.equal(asked.code, 0, asked.stderr);
-	const { post, url } = JSON.parse(asked.stdout) as { post: { id: string; title: string; questions: { options: { id: string; key: string; label?: string }[] }[] }; url: string };
+	const { post, url } = JSON.parse(asked.stdout) as {
+		post: { id: string; title: string; items: { id: string; name: string }[]; questions: { items: string[]; options: { id: string; key: string; label?: string; items: string[] }[] }[] };
+		url: string;
+	};
 	assert.equal(post.title, "Keep this one?");
+	// The file is what the question is about, shown above the options — not an option itself
+	assert.deepEqual(post.questions[0]!.items.map((id) => post.items.find((item) => item.id === id)?.name), ["option.png"]);
 	assert.deepEqual(
-		post.questions[0]!.options.map((option) => [option.key, option.label ?? null]),
+		post.questions[0]!.options.map((option) => [option.key, option.label ?? null, option.items.length]),
 		[
-			["A", null],
-			["B", "No, redo it"],
+			["A", "Keep it", 0],
+			["B", "No, redo it", 0],
 		],
 	);
 
@@ -91,7 +96,21 @@ test("ask posts a question, and wait exits with the answer", async () => {
 		body: JSON.stringify({ post: post.id, question: "q1", choices: [post.questions[0]!.options[1]!.id], text: "too dark", by: "human" }),
 	});
 	assert.equal(await exited, 0);
+	assert.match(output, /about: option\.png/);
 	assert.match(output, /answered: B \(No, redo it\) — "too dark"/);
+});
+
+test("ask refuses to make a single file option A next to sentences", async () => {
+	const image = writeFile(dir, "cut.png", PNG);
+	const refused = await run(["ask", "Ship this cut?", image, "--option", "OK", "--option", "Redo it", "--json", "--no-open"]);
+	assert.notEqual(refused.code, 0);
+	assert.match(refused.stderr, /--about .*cut\.png/);
+	// Nor a single file on its own: there is nothing to choose between
+	assert.notEqual((await run(["ask", "Ship it?", image, "--json", "--no-open"])).code, 0);
+	// Two files are a choice, and a file next to a pattern is one of several options to look at
+	assert.equal((await run(["ask", "Which?", image, writeFile(dir, "cut2.png", PNG), "--json", "--no-open"])).code, 0);
+	const set = [writeFile(dir, "set1.png", PNG), writeFile(dir, "set2.png", PNG)];
+	assert.equal((await run(["ask", "Which?", image, "--pattern", "The set", set[0]!, set[1]!, "--json", "--no-open"])).code, 0);
 });
 
 test("ask groups the files after --pattern into one option", async () => {
@@ -111,7 +130,7 @@ test("ask groups the files after --pattern into one option", async () => {
 });
 
 test("the Stop hook does not ask to wait on a question the user already answered", async () => {
-	const asked = await run(["ask", "Ship it?", writeFile(dir, "reply.png", PNG), "--json", "--no-open"]);
+	const asked = await run(["ask", "Ship it?", "--about", writeFile(dir, "reply.png", PNG), "--option", "OK", "--option", "Not yet", "--json", "--no-open"]);
 	assert.equal(asked.code, 0, asked.stderr);
 	const { post, url } = JSON.parse(asked.stdout) as { post: { id: string; questions: { options: { id: string }[] }[] }; url: string };
 	await fetch(`${new URL(url).origin}/api/answers`, {

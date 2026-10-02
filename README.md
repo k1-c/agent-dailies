@@ -42,8 +42,9 @@ yesterday's renders and decides what to keep.
   description, fetched by a command you choose (Linear, GitHub, …) or written by
   the agent.
 - **Questions about what you see** — `agent-dailies ask` turns files, patterns made
-  of several files, and sentences into options A, B, C… to pick from, or takes a
-  whole review sheet; your answers wake the agent. Questions answered from words
+  of several files, and sentences into options A, B, C… to pick from, shows the
+  thing to sign off on above the options (`--about`), or takes a whole review
+  sheet; your answers wake the agent. Questions answered from words
   alone stay in the terminal.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
@@ -112,6 +113,7 @@ When it needs a decision, it asks:
 agent-dailies ask "Which front view do we keep?" a.png b.png --option "Neither — redraw it" \
   --why "B matches the back view best; A loses the cape."
 agent-dailies ask "Which palette?" --pattern "Current" c_front.png c_back.png --pattern "Warmer" w_front.png w_back.png
+agent-dailies ask "Ship this cut?" --about cut.mp4 --option "OK" --option "Fix something"   # sign off on one thing
 agent-dailies ask --file review.json      # several decisions at once (see the skill for the format)
 agent-dailies wait <post-id>              # in the background: exits with the answers
 ```

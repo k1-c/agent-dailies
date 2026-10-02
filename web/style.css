@@ -989,6 +989,11 @@ body.side-hidden .sidebar {
 	padding: 10px 0 0;
 }
 
+/* What a question is about sits above its options; keep it short enough that the options stay in view */
+.question .grid.context .stage {
+	--stage-height: clamp(220px, 46vh, 560px);
+}
+
 .options {
 	display: grid;
 	gap: 8px;

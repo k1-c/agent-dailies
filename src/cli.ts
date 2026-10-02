@@ -40,10 +40,13 @@ Usage:
   agent-dailies show <file>… [--title T] [--note N] [--tag X]… [--issue ID] [--lane L] [--no-open] [--json]
       Put files at the top of the viewer (images, videos, audio, GLB, PDF, text…).
       Starts the viewer if needed; opens the browser only when no viewer tab is open.
-  agent-dailies ask "<question>" [file…] [--option TEXT]… [--why TEXT] [--multi] [--wait] [--json]
+  agent-dailies ask "<question>" [file…] [--pattern LABEL file…]… [--option TEXT]… [--about file]…
+                    [--why TEXT] [--multi] [--wait] [--json]
   agent-dailies ask --file questions.json [--wait] [--json]
       Ask the user to decide: files and/or sentences become options A, B, C… they pick from in
-      the viewer. --file takes several questions (a review sheet). --wait blocks until answered.
+      the viewer. --about shows a file above the options without making it one (to sign off on
+      one thing: --about video.mp4 --option "OK" --option "Redo it"). --file takes several
+      questions (a review sheet). --wait blocks until answered.
   agent-dailies wait <post-id> [--timeout 110m]
                                       Wait until a question post is answered (run it in the background)
   agent-dailies context [--json]      What the user selected in the viewer (or the newest post)
@@ -395,6 +398,7 @@ async function ask(args: string[]): Promise<void> {
 			...WHERE_OPTIONS,
 			option: { type: "string", short: "o", multiple: true },
 			pattern: { type: "string", short: "p", multiple: true },
+			about: { type: "string", short: "a", multiple: true },
 			why: { type: "string" },
 			multi: { type: "boolean" },
 			file: { type: "string", short: "f" },
@@ -409,10 +413,12 @@ async function ask(args: string[]): Promise<void> {
 	if (values.help || (!values.file && positionals.length === 0)) {
 		return out(
 			[
-				'Usage: agent-dailies ask "<question>" [file…] [--pattern LABEL file…]… [--option TEXT]… [--why TEXT] [--multi] [--wait] [--json]',
+				'Usage: agent-dailies ask "<question>" [file…] [--pattern LABEL file…]… [--option TEXT]… [--about file]… [--why TEXT] [--multi] [--wait] [--json]',
 				"       agent-dailies ask --file questions.json [--wait] [--json]",
 				"Options, A, B, C… in order: each file on its own; --pattern LABEL with the files after it (one option with",
-				"several reference files); --option TEXT (a sentence). The user picks one per question and presses Send.",
+				"several reference files); --option TEXT (a sentence). --about file shows a file above the options without",
+				"making it one — to sign off on one thing: --about video.mp4 --option \"OK\" --option \"Redo it\".",
+				"The user picks one per question and presses Send.",
 			].join("\n"),
 		);
 	}
@@ -426,6 +432,7 @@ async function ask(args: string[]): Promise<void> {
 	} else {
 		let text: string | undefined;
 		const options: { label?: string; files?: string[] }[] = [];
+		const about: string[] = [];
 		let pattern: { label?: string; files: string[] } | undefined;
 		for (const token of tokens) {
 			if (token.kind === "positional") {
@@ -438,9 +445,20 @@ async function ask(args: string[]): Promise<void> {
 			} else if (token.kind === "option" && token.name === "option") {
 				pattern = undefined;
 				options.push({ label: token.value });
+			} else if (token.kind === "option" && token.name === "about" && token.value !== undefined) {
+				pattern = undefined;
+				about.push(token.value);
 			}
 		}
-		spec = { questions: [{ text: text!, why: values.why as string | undefined, multi: Boolean(values.multi), options }] };
+		// One file is not a choice between things: asking "OK?" about it made the file itself
+		// option A next to the sentences. It belongs above the options.
+		const fileOptions = options.filter((option) => option.files && !option.label);
+		if (fileOptions.length === 1 && options.every((option) => !option.files || !option.label)) {
+			throw new Error(
+				`one file is not a choice between things — show it with --about ${fileOptions[0]!.files![0]} and ask with sentences, e.g. --option "OK" --option "Redo it"`,
+			);
+		}
+		spec = { questions: [{ text: text!, why: values.why as string | undefined, multi: Boolean(values.multi), files: about, options }] };
 	}
 	const { items, questions } = await buildQuestions(target, spec, base);
 	const input = postInput(values, items, {
@@ -472,6 +490,8 @@ function describeQuestions(post: PostView): string[] {
 	const names = new Map(post.items.map((item) => [item.id, item.name]));
 	for (const question of post.questions ?? []) {
 		lines.push(`- ${question.text}${question.multi ? " (more than one may be chosen)" : ""}  [${question.id}]`);
+		const shown = (question.items ?? []).map((id) => names.get(id)).filter(Boolean);
+		if (shown.length) lines.push(`    about: ${shown.join(", ")}`);
 		for (const option of question.options) {
 			const files = option.items.map((id) => names.get(id)).filter(Boolean).join(", ");
 			lines.push(`    ${option.key}. ${[option.label, files].filter(Boolean).join(" — ")}`);

@@ -43,6 +43,17 @@ agent-dailies ask "Which front view do we keep?" a.png b.png --option "Neither �
 
 `--multi` lets them pick several. They can add a note to their answer.
 
+To sign off on one thing (a cut, a render, a page), it is not an option — show it above
+the options with `--about` and let the options be sentences:
+
+```sh
+agent-dailies ask "Ship this cut?" --about cut.mp4 \
+  --option "OK as it is" --option "Fix something (note it)"
+```
+
+`ask` refuses a single file with only sentences next to it, which would make the file
+itself option A.
+
 When an option is a pattern shown by several files, group the files under it (the
 user chooses the pattern, not single files):
 
@@ -73,7 +84,8 @@ Several such decisions at once (a review of things to look at) — write a sheet
 }
 ```
 
-Options can carry `"files": ["path.png"]` (relative to the sheet), questions too.
+Options can carry `"files": ["path.png"]` (relative to the sheet), questions too — a
+question's files show above its options as what the question is about.
 Write the sheet in the user's language. Do not start labels with "A:" — the letters
 are added for you.
 

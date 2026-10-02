@@ -140,13 +140,17 @@ Ask — only when the user has to look at something to answer (pick between
 images, videos, models or pages you made; sign off on how something looks):
 - \`agent-dailies ask "<question>" a.png b.png --option "Neither — redo it" --why "<your recommendation and why>"\`
   Files and --option texts become options A, B, C… (--multi lets them pick several).
+- To sign off on one thing, show it above the options with --about and answer in sentences:
+  \`agent-dailies ask "Ship this cut?" --about cut.mp4 --option "OK" --option "Fix something (note it)"\`
+  (one file alone is not a choice; ask refuses to make it option A).
   When one option is a pattern shown by several files, group them:
   \`ask "Which version?" --pattern "Current" a1.png a2.png --pattern "Proposed" b1.png b2.png\`.
   The user picks per question and presses Send; a note is optional.
 - Several such decisions at once (a review of things to look at): write a JSON sheet
   {"title": "…", "questions": [{"text": "…", "why": "…", "options": ["OK as proposed",
   {"label": "Alternative: …", "body": "…"}, "Let's discuss"]}]} — options may carry
-  "files" — and run \`agent-dailies ask --file sheet.json\`.
+  "files", and a question's own "files" show above its options — and run
+  \`agent-dailies ask --file sheet.json\`.
 - Then start \`agent-dailies wait <post-id>\` in the background (Bash with
   run_in_background, timeout 7200000). It exits with the answers once every question
   is answered (or the user comments), which wakes you. Act on them.
