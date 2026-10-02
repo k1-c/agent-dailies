@@ -148,7 +148,8 @@ it has been handed over once:
    background. Claude Code wakes the agent when a background command exits, and
    `watch` exits with your comment.
 2. **When the agent is about to stop** — the Stop hook hands over unread comments
-   (and, once per new post, reminds the agent to start `watch`).
+   (and, once per unanswered question it asked, reminds the agent to start `wait`;
+   a show alone needs no reply, so it gets no reminder).
 3. **With your next message** — the UserPromptSubmit hook adds marks and comments
    since the agent last heard.
 4. **In a new session** — the SessionStart hook passes on feedback left in this
@@ -238,7 +239,7 @@ is a plain union — the groundwork for the planned sync (below).
 | `AGENT_DAILIES_HOST` | `127.0.0.1` (`0.0.0.0` to reach it from other machines, e.g. over Tailscale) |
 | `AGENT_DAILIES_NO_OPEN=1` | never open a browser from `show` |
 | `AGENT_DAILIES_BROWSER` | command to open URLs with |
-| `AGENT_DAILIES_AUTO_WATCH=0` | no Stop-hook reminder to start `watch` |
+| `AGENT_DAILIES_AUTO_WATCH=0` | no Stop-hook reminder to start `wait` for an unanswered question |
 | `AGENT_DAILIES_DEVLOG=0` | no Stop-hook suggestion of a devlog entry |
 | `AGENT_DAILIES_ISSUE_COMMAND` | the issue command, overriding the config file |
 | `AGENT_DAILIES_CONFIG` | another config file |

@@ -34,10 +34,9 @@ test("show starts the viewer, and a comment wakes watch", async () => {
 	const { post, url } = JSON.parse(shown.stdout) as { post: { id: string; session: string }; url: string };
 	assert.equal(post.session, "cli-session");
 
+	// A show alone may want no reply, so the Stop hook does not ask to start watch after it
 	const stop = await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }));
-	assert.equal(stop.code, 2);
-	assert.match(stop.stderr, /agent-dailies watch/);
-	assert.equal((await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }))).code, 0);
+	assert.equal(stop.code, 0, stop.stderr);
 
 	const watcher = spawn(process.execPath, [CLI, "watch", "--timeout", "60s"], { env, cwd: dir });
 	let output = "";
@@ -111,18 +110,33 @@ test("ask groups the files after --pattern into one option", async () => {
 	);
 });
 
-test("the Stop hook does not ask to wait on a post the user already replied to", async () => {
-	const shown = await run(["show", writeFile(dir, "reply.png", PNG), "--json"]);
-	const { post, url } = JSON.parse(shown.stdout) as { post: { id: string }; url: string };
-	await fetch(`${new URL(url).origin}/api/comments`, {
+test("the Stop hook does not ask to wait on a question the user already answered", async () => {
+	const asked = await run(["ask", "Ship it?", writeFile(dir, "reply.png", PNG), "--json", "--no-open"]);
+	assert.equal(asked.code, 0, asked.stderr);
+	const { post, url } = JSON.parse(asked.stdout) as { post: { id: string; questions: { options: { id: string }[] }[] }; url: string };
+	await fetch(`${new URL(url).origin}/api/answers`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ post: post.id, text: "OK", by: "human" }),
+		body: JSON.stringify({ post: post.id, question: "q1", choices: [post.questions[0]!.options[0]!.id], text: "OK", by: "human" }),
 	});
 	const stop = await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }));
-	// The OK is handed over (exit 2 with it) the first time, and then nothing is left to say.
+	// The answer is handed over (exit 2 with it) the first time, and then there is no reason to wait on this post
 	assert.match(stop.stderr, /OK/);
-	assert.equal((await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }))).code, 0);
+	const again = await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }));
+	assert.doesNotMatch(again.stderr, new RegExp(post.id));
+});
+
+test("the Stop hook asks to wait only for an unanswered question, once", async () => {
+	const asked = await run(["ask", "Which one?", writeFile(dir, "q1.png", PNG), writeFile(dir, "q2.png", PNG), "--json", "--no-open"]);
+	assert.equal(asked.code, 0, asked.stderr);
+	const { post } = JSON.parse(asked.stdout) as { post: { id: string } };
+	// A show after the question does not hide it: the open question is still what to wait for
+	assert.equal((await run(["show", writeFile(dir, "later.png", PNG), "--json"])).code, 0);
+	const stop = await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }));
+	assert.equal(stop.code, 2);
+	assert.match(stop.stderr, new RegExp(`agent-dailies wait ${post.id}`));
+	assert.doesNotMatch(stop.stderr, /agent-dailies watch/);
+	assert.equal((await run(["hook", "stop"], JSON.stringify({ session_id: "cli-session" }))).code, 0, "only once per question");
 });
 
 test("ask --file takes a review sheet with files relative to it", async () => {

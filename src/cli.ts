@@ -516,7 +516,7 @@ async function waitForAnswers(target: Store, postId: string, values: Values): Pr
 	};
 	await check();
 	await streamUntil(`api/watch?post=${encodeURIComponent(postId)}`, target, values, check);
-	await finish(`No answer in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Run \`agent-dailies wait ${postId}\` again to keep waiting.`);
+	await finish(`No answer in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Run \`agent-dailies wait ${postId}\` again only if you still need the answer to go on; otherwise tell the user what you are waiting for and finish.`);
 }
 
 async function wait(args: string[]): Promise<void> {
@@ -745,7 +745,7 @@ async function watch(args: string[]): Promise<void> {
 	const { watching } = await viewer.get<{ watching: number }>(`api/watchers?session=${encodeURIComponent(session)}`);
 	if (watching > 0) await finish("Already watching for this session in another process; nothing else to start.");
 	await streamUntil(`api/watch?session=${encodeURIComponent(session)}`, target, values, deliver);
-	await finish(`No comments in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Start \`agent-dailies watch\` in the background again if you still want to hear them.`);
+	await finish(`No comments in ${Math.round(duration(values.timeout as string | undefined, 110 * 60_000) / 60_000)} min. Start \`agent-dailies watch\` in the background again only while you still expect a reply; once your work is done and nothing waits on the user, let it end.`);
 }
 
 
@@ -1169,25 +1169,24 @@ async function hook(args: string[]): Promise<void> {
 			if (input.stop_hook_active) return;
 			if (devlogReminder(target, catalog, session)) return;
 			if (process.env.AGENT_DAILIES_AUTO_WATCH === "0") return;
-			const latest = postedBy(catalog, session, REMIND_WITHIN_MS).at(-1);
-			if (!latest || readSession(target, session).reminded === latest.id) return;
-			// The user already answered or commented on it: nothing to wait for.
-			if (catalog.history.some((event) => event.post === latest.id && event.by === "human")) return;
+			// Only an unanswered question is worth waiting for. A show (a report, a devlog entry) may want no reply at
+			// all, and a reminder after it had agents re-arm watch with nothing to wait for; the guide already says to
+			// keep watch running when a show wants a reaction.
+			const asking = postedBy(catalog, session, REMIND_WITHIN_MS)
+				.filter((post) => catalog.openQuestions(post).length > 0)
+				.at(-1);
+			if (!asking || readSession(target, session).reminded === asking.id) return;
 			const viewer = client();
 			const health = await viewer.health();
 			if (!health || health.home !== target.home) return;
 			const { watching } = await viewer.get<{ watching: number }>(
-				`api/watchers?session=${encodeURIComponent(session)}&post=${encodeURIComponent(latest.id)}`,
+				`api/watchers?session=${encodeURIComponent(session)}&post=${encodeURIComponent(asking.id)}`,
 			);
-			writeSession(target, session, { reminded: latest.id });
+			writeSession(target, session, { reminded: asking.id });
 			if (watching > 0) return;
-			const asking = catalog.openQuestions(latest).length > 0;
 			process.stderr.write(
-				asking
-					? `You asked the user something in agent-dailies (${latest.id}) and nothing is waiting for the answer. ` +
-							`Start \`agent-dailies wait ${latest.id}\` with run_in_background (timeout 7200000) so the answer wakes you, then finish.\n`
-					: "You showed the user something in agent-dailies and nothing is listening for their comments. " +
-							"Start `agent-dailies watch` with run_in_background (timeout 7200000) so a comment wakes you, then finish.\n",
+				`You asked the user something in agent-dailies (${asking.id}) and nothing is waiting for the answer. ` +
+					`Start \`agent-dailies wait ${asking.id}\` with run_in_background (timeout 7200000) so the answer wakes you, then finish.\n`,
 			);
 			process.exitCode = 2;
 			return;

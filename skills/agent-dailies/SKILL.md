@@ -147,7 +147,8 @@ its own tab (Devlog), apart from what you show for review (Dailies).
 - `agent-dailies context` — what they selected (or the newest post): files with paths
   you can read, answers, replies. Run it first when they say "this one" / "これ".
 - `agent-dailies watch` in the background — exits when they comment or answer on
-  anything you showed this session. Start it again after acting.
+  anything you showed this session. Start it again only while you still expect a
+  reply; when your work is done and nothing waits on the user, let it end.
 - `agent-dailies feedback [--since 2h] [--all]` — their replies and answers.
 - `agent-dailies list [--all]`, `agent-dailies get <item-id> [--to PATH]`.
 

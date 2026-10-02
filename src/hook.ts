@@ -186,7 +186,9 @@ Hear back:
   selected (with a path you can read), marks, comments and answers.
 - After showing something you want a reaction to, keep \`agent-dailies watch\` running
   in the background (run_in_background, timeout 7200000): it exits when the user
-  comments or answers, waking you. Start it again after acting. One per session.
+  comments or answers, waking you. One per session. Start it again only while you
+  still expect a reply; when your work is done and nothing waits on the user, let it
+  end (re-arming it then only wakes you with "no comments").
 - \`agent-dailies feedback\` lists their replies and answers.
 - Posts are grouped by repository, issue and session; the issue comes from the branch
   name (or --issue). The viewer shows the issue's summary above its posts. If it has
