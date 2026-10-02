@@ -372,7 +372,17 @@
 		const name = el("span", { class: "name", title: `${item.source || item.name}\n${t.dragHint}`, text: item.name });
 		makeDraggable(name, item);
 		if (item.kind !== "image") makeDraggable(stage, item);
-		tile.append(stage, el("div", { class: "tile-foot" }, [name, el("span", { class: "size", text: size(item.size) }), ...fileActions(post, item, { withFull: true })]));
+		const many = perFile(post);
+		tile.append(
+			stage,
+			el("div", { class: "tile-foot" }, [
+				name,
+				el("span", { class: "size", text: size(item.size) }),
+				many ? noteButton(post, item) : null,
+				...fileActions(post, item, { withFull: true }),
+			]),
+		);
+		if (many) tile.append(buildThread(post, item));
 		tile.addEventListener("click", () => select(post.id, item.id));
 		tile.addEventListener("dblclick", (event) => {
 			if (event.target.closest("model-viewer, video, audio, pre, iframe")) return;
@@ -391,7 +401,8 @@
 	}
 
 	function buildComment(post, comment) {
-		const item = comment.item ? post.items.find((candidate) => candidate.id === comment.item) : null;
+		// Under its file a comment needs no "on …"; below the post it does.
+		const item = comment.item && !onFile(post, comment) ? post.items.find((candidate) => candidate.id === comment.item) : null;
 		return el("div", { class: "comment" }, [
 			el("span", { class: `who ${comment.by}`, text: comment.by === "agent" ? t.agent : t.human }),
 			el("span", {}, [
@@ -401,12 +412,149 @@
 		]);
 	}
 
-	function composeTarget(post) {
-		if (selection && selection.post === post.id && selection.item) {
-			const item = post.items.find((candidate) => candidate.id === selection.item);
-			if (item && post.items.length > 1) return { item: item.id, label: t.commentOn(item.name) };
+	async function sendComment(post, itemId, text) {
+		const comment = await api("/api/comments", { post: post.id, item: itemId, text, by: "human" });
+		// The live event brings it too; adding it now shows it without waiting.
+		addComment(comment);
+	}
+
+	// ---- notes on files ----
+
+	// A post with several files (or with questions) takes notes per file, under
+	// each file. A post with one file is that file: its notes go below the post.
+	function perFile(post) {
+		return post.items.length > 1 || !!post.questions?.length;
+	}
+
+	function onFile(post, comment) {
+		return !!comment.item && perFile(post) && post.items.some((item) => item.id === comment.item);
+	}
+
+	function fileComments(post, item) {
+		return (post.comments || []).filter((comment) => comment.item === item.id);
+	}
+
+	// Whether a file's note row is open and what was typed in it, kept while a
+	// question re-renders and shared with full screen.
+	const notes = new Map(); // `${post}/${item}` -> { open, draft }
+
+	function noteState(post, item) {
+		const key = `${post.id}/${item.id}`;
+		if (!notes.has(key)) notes.set(key, { open: false, draft: "" });
+		return notes.get(key);
+	}
+
+	const BUBBLE =
+		'<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3h11v7.5h-6.2L4.5 13v-2.5h-2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+
+	function noteButton(post, item) {
+		const button = el("button", { class: "act icon talk", type: "button", title: post.questions?.length ? t.noteFile : `${t.noteFile} (c)`, "aria-label": t.noteFile, "data-note": `${post.id}/${item.id}` });
+		button.innerHTML = BUBBLE;
+		button.append(el("span", { class: "count" }));
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			select(post.id, item.id);
+			const state = noteState(post, item);
+			if (state.open) closeNote(post, item);
+			else openNote(post, item, button.closest(".tile, .option"));
+		});
+		fillNoteButton(button, post, item);
+		return button;
+	}
+
+	function fillNoteButton(button, post, item) {
+		const count = fileComments(post, item).length;
+		button.querySelector(".count").textContent = count ? String(count) : "";
+		button.classList.toggle("has", count > 0);
+		button.setAttribute("aria-expanded", String(noteState(post, item).open));
+	}
+
+	// A file's comments, and below them (when opened) a row to add one.
+	function buildThread(post, item) {
+		const state = noteState(post, item);
+		const input = el("input", { type: "text", class: "note-input", placeholder: t.noteFile, "aria-label": t.noteFile });
+		input.value = state.draft;
+		const send = el("button", { class: "send", type: "button", text: t.send });
+		const sync = () => (send.disabled = !input.value.trim());
+		const submit = async () => {
+			const text = input.value.trim();
+			if (!text) return;
+			input.value = state.draft = "";
+			sync();
+			try {
+				await sendComment(post, item.id, text);
+			} catch (error) {
+				input.value = state.draft = text;
+				sync();
+				toast(t.sendFailed, "error");
+				console.error(error);
+			}
+		};
+		input.addEventListener("input", () => {
+			state.draft = input.value;
+			sync();
+		});
+		input.addEventListener("focus", () => select(post.id, item.id));
+		input.addEventListener("keydown", (event) => {
+			// Typing here is not a shortcut, nor Enter/Space on an option card.
+			event.stopPropagation();
+			if (event.key === "Enter" && !event.isComposing) {
+				event.preventDefault();
+				submit();
+			} else if (event.key === "Escape") {
+				event.preventDefault();
+				if (input.value.trim()) input.blur();
+				else closeNote(post, item);
+			}
+		});
+		send.addEventListener("click", submit);
+		sync();
+		const thread = el("div", { class: "thread", "data-note": `${post.id}/${item.id}` }, [
+			el("div", { class: "comment-list" }),
+			el("div", { class: "note-row" }, [input, send]),
+		]);
+		// Clicks here are for the note, not for choosing an option or opening full screen.
+		thread.addEventListener("click", (event) => event.stopPropagation());
+		thread.addEventListener("dblclick", (event) => event.stopPropagation());
+		fillThread(thread, post, item);
+		return thread;
+	}
+
+	function fillThread(thread, post, item) {
+		const comments = fileComments(post, item);
+		const { open } = noteState(post, item);
+		thread.querySelector(".comment-list").replaceChildren(...comments.map((comment) => buildComment(post, comment)));
+		thread.querySelector(".note-row").hidden = !open;
+		thread.hidden = !comments.length && !open;
+	}
+
+	function refreshNotes(post, item) {
+		const key = `${post.id}/${item.id}`;
+		for (const node of document.querySelectorAll(`[data-note="${key}"]`)) {
+			if (node.classList.contains("thread")) fillThread(node, post, item);
+			else fillNoteButton(node, post, item);
 		}
-		return { item: undefined, label: post.items.length > 1 ? t.commentOnPost : "" };
+	}
+
+	// Opens the note row of a file and puts the cursor in it. `near` picks which
+	// copy when a file shows twice; it defaults to the post's first.
+	function openNote(post, item, near) {
+		const key = `${post.id}/${item.id}`;
+		const thread = (near || document.getElementById(post.id))?.querySelector(`.thread[data-note="${key}"]`);
+		if (!thread) return false;
+		noteState(post, item).open = true;
+		refreshNotes(post, item);
+		const input = thread.querySelector(".note-input");
+		input.focus({ preventScroll: true });
+		thread.scrollIntoView({ behavior: "smooth", block: "nearest" });
+		return true;
+	}
+
+	function closeNote(post, item) {
+		const state = noteState(post, item);
+		state.open = false;
+		if (document.activeElement?.closest(`.thread[data-note="${post.id}/${item.id}"]`)) document.activeElement.blur();
+		refreshNotes(post, item);
 	}
 
 	// ---- devlog entries ----
@@ -551,7 +699,7 @@
 				el("div", { class: "o-head" }, [
 					el("span", { class: "o-key", text: option.key }),
 					el("span", { class: "o-label", text: option.label || items.map((item) => item.name).join(", ") }),
-					...(items.length === 1 ? fileActions(post, items[0]) : []),
+					...(items.length === 1 ? [noteButton(post, items[0]), ...fileActions(post, items[0])] : []),
 					el("span", { class: "o-num", text: index < 9 ? String(index + 1) : "" }),
 				]),
 			);
@@ -566,10 +714,15 @@
 					});
 					const label = el("div", { class: "o-file" }, [stage]);
 					if (items.length > 1) {
-						const caption = el("div", { class: "o-file-name" }, [el("span", { class: "name", text: item.name }), ...fileActions(post, item)]);
+						const caption = el("div", { class: "o-file-name" }, [
+							el("span", { class: "name", text: item.name }),
+							noteButton(post, item),
+							...fileActions(post, item),
+						]);
 						makeDraggable(caption.querySelector(".name"), item);
 						label.append(caption);
 					}
+					label.append(buildThread(post, item));
 					files.append(label);
 				}
 				card.append(files);
@@ -628,7 +781,11 @@
 				]),
 			);
 		}
+		// Choosing or an answer arriving re-renders the question; a note being
+		// typed in it keeps the cursor.
+		const typing = block.contains(document.activeElement) ? document.activeElement.closest(".thread")?.dataset.note : null;
 		block.replaceChildren(...parts);
+		if (typing) block.querySelector(`.thread[data-note="${typing}"] .note-input`)?.focus({ preventScroll: true });
 	}
 
 	// The first question of a post whose picks differ from what was sent.
@@ -755,12 +912,13 @@
 		updatePostState(node, post);
 
 		const list = el("div", { class: "comment-list" });
-		for (const comment of post.comments || []) list.append(buildComment(post, comment));
+		for (const comment of post.comments || []) if (!onFile(post, comment)) list.append(buildComment(post, comment));
 		const parts = [list];
-		// A post that asks questions is answered per question; others get a reply row:
-		// "OK" with nothing written, "Send" once there is a note.
+		// A post that asks questions is answered per question; others get a reply row
+		// about the whole post (notes on one file go under that file): "OK" with
+		// nothing written, "Send" once there is a note.
 		if (!post.questions?.length) {
-			const target = el("span", { class: "target" });
+			const target = el("span", { class: "target", text: post.items.length > 1 ? t.commentOnPost : "" });
 			const input = el("input", { type: "text", class: "reply-note", placeholder: t.replyPlaceholder, "aria-label": t.replyPlaceholder });
 			const send = el("button", { class: "send reply", type: "button", text: t.ok });
 			const sync = () => (send.textContent = input.value.trim() ? t.send : t.ok);
@@ -768,13 +926,13 @@
 				const text = input.value.trim() || "OK";
 				input.value = "";
 				sync();
-				const { item } = composeTarget(post);
 				try {
-					await api("/api/comments", { post: post.id, item, text, by: "human" });
+					await sendComment(post, undefined, text);
 					toast(t.sent);
 				} catch (error) {
 					input.value = text === "OK" ? "" : text;
 					sync();
+					toast(t.sendFailed, "error");
 					console.error(error);
 				}
 			};
@@ -797,14 +955,8 @@
 		node.addEventListener("click", (event) => {
 			if (!event.target.closest(".tile") && !event.target.closest(".compose")) select(post.id, selection?.post === post.id ? selection.item : undefined);
 		});
-		updateCompose(node, post);
 		node.hidden = !visible(post);
 		return node;
-	}
-
-	function updateCompose(node, post) {
-		const target = node.querySelector(".compose .target");
-		if (target) target.textContent = composeTarget(post).label;
 	}
 
 	// "OK" from the keyboard for the post in hand (one that asks nothing).
@@ -856,8 +1008,13 @@
 		if (!post) return;
 		if ((post.comments || []).some((existing) => existing.id === comment.id)) return;
 		post.comments = [...(post.comments || []), comment];
+		if (lightboxAt?.post === post.id) renderLightboxNotes();
+		if (onFile(post, comment)) {
+			refreshNotes(post, post.items.find((item) => item.id === comment.item));
+			return;
+		}
 		const node = document.getElementById(post.id);
-		node?.querySelector(".comment-list").append(buildComment(post, comment));
+		node?.querySelector(".comments > .comment-list").append(buildComment(post, comment));
 		const box = node?.querySelector(".comments");
 		if (box) box.hidden = false;
 	}
@@ -870,10 +1027,6 @@
 			const node = document.getElementById(selection.post);
 			node?.classList.add("current");
 			if (selection.item) node?.querySelector(`.tile[data-item="${selection.item}"]`)?.classList.add("selected");
-		}
-		for (const [id, post] of posts) {
-			const node = document.getElementById(id);
-			if (node) updateCompose(node, post);
 		}
 	}
 
@@ -1232,15 +1385,84 @@
 		const position = post.items.length > 1 ? `${lightboxAt.index + 1} / ${post.items.length} · ` : "";
 		lightboxCaption.replaceChildren(
 			el("span", { text: `${position}${item.name}${post.title ? ` — ${post.title}` : ""}` }),
-			...fileActions(post, item),
+			...fileActions(post, item).filter(Boolean),
 		);
 		select(post.id, item.id);
+		lightboxInput.value = noteState(post, item).draft;
+		syncLightboxSend();
+		renderLightboxNotes();
 	}
 
+	// Full screen is where a file is looked at closely, so its notes are written
+	// there: on this file, or on the post when the post is this one file.
+	const lightboxList = el("div", { class: "comment-list" });
+	const lightboxInput = el("input", { type: "text", class: "note-input", placeholder: t.noteFile, "aria-label": t.noteFile });
+	const lightboxSend = el("button", { class: "send", type: "button", text: t.send });
+	lightbox.insertBefore(el("div", { class: "lightbox-notes" }, [lightboxList, el("div", { class: "note-row" }, [lightboxInput, lightboxSend])]), $("lightbox-close"));
+
+	function lightboxFile() {
+		const post = lightboxAt && posts.get(lightboxAt.post);
+		return post ? { post, item: post.items[lightboxAt.index] } : null;
+	}
+
+	function renderLightboxNotes() {
+		const { post, item } = lightboxFile() || {};
+		if (!post) return;
+		const comments = perFile(post) ? fileComments(post, item) : (post.comments || []).filter((comment) => !onFile(post, comment));
+		lightboxList.replaceChildren(...comments.map((comment) => buildComment(post, comment)));
+		lightboxList.hidden = !comments.length;
+		lightboxList.scrollTop = lightboxList.scrollHeight;
+	}
+
+	function syncLightboxSend() {
+		lightboxSend.disabled = !lightboxInput.value.trim();
+	}
+
+	async function sendLightboxNote() {
+		const { post, item } = lightboxFile() || {};
+		const text = lightboxInput.value.trim();
+		if (!post || !text) return;
+		const state = noteState(post, item);
+		lightboxInput.value = state.draft = "";
+		syncLightboxSend();
+		try {
+			await sendComment(post, perFile(post) ? item.id : undefined, text);
+		} catch (error) {
+			lightboxInput.value = state.draft = text;
+			syncLightboxSend();
+			toast(t.sendFailed, "error");
+			console.error(error);
+		}
+	}
+
+	lightboxInput.addEventListener("input", () => {
+		const file = lightboxFile();
+		if (file) noteState(file.post, file.item).draft = lightboxInput.value;
+		syncLightboxSend();
+	});
+	lightboxInput.addEventListener("keydown", (event) => {
+		if (event.key === "Enter" && !event.isComposing) {
+			event.preventDefault();
+			sendLightboxNote();
+		}
+	});
+	lightboxSend.addEventListener("click", sendLightboxNote);
+
 	function closeLightbox() {
+		const post = lightboxAt && posts.get(lightboxAt.post);
 		lightbox.hidden = true;
 		lightboxStage.replaceChildren();
 		lightboxAt = null;
+		if (lightboxInput.matches(":focus")) lightboxInput.blur();
+		// The files' own note rows show what was typed here and not sent.
+		for (const item of post?.items || []) {
+			const { draft } = noteState(post, item);
+			for (const input of document.querySelectorAll(`.thread[data-note="${post.id}/${item.id}"] .note-input`)) {
+				if (input.value === draft) continue;
+				input.value = draft;
+				input.dispatchEvent(new Event("input"));
+			}
+		}
 	}
 
 	function stepLightbox(delta) {
@@ -1256,7 +1478,7 @@
 	// Double-click closes it again, the way it was opened — except on things that
 	// use double-clicks themselves (video, 3D models, text, pages).
 	lightbox.addEventListener("dblclick", (event) => {
-		if (event.target.closest("model-viewer, video, audio, pre, iframe, button, a")) return;
+		if (event.target.closest("model-viewer, video, audio, pre, iframe, button, a, .lightbox-notes")) return;
 		closeLightbox();
 	});
 
@@ -1296,11 +1518,22 @@
 		if (event.ctrlKey || event.metaKey || event.altKey) return;
 		const typing = event.target.closest("input, textarea, [contenteditable]");
 		if (!lightbox.hidden) {
+			if (typing) {
+				// ← → with nothing typed still turn to the next file, so notes on a
+				// row of files can be written one after another.
+				const turn = typing === lightboxInput && !lightboxInput.value && !event.isComposing && (event.key === "ArrowRight" || event.key === "ArrowLeft");
+				if (event.key === "Escape") typing.blur();
+				else if (turn) stepLightbox(event.key === "ArrowRight" ? 1 : -1);
+				else return;
+				event.preventDefault();
+				return;
+			}
 			if (event.key === "Escape") closeLightbox();
 			else if (event.key === "ArrowRight" || event.key === "l") stepLightbox(1);
 			else if (event.key === "ArrowLeft" || event.key === "h") stepLightbox(-1);
 			else if ((event.key === "y" || event.key === "Y") && selectedItem()) copyItem(selectedItem(), event.key === "Y");
 			else if (event.key === "d" && selectedItem()) downloadItem(selectedItem());
+			else if (event.key === "c") lightboxInput.focus();
 			else return;
 			event.preventDefault();
 			return;
@@ -1337,8 +1570,16 @@
 				break;
 			}
 			case "c":
-				if (selection) document.getElementById(selection.post)?.querySelector(".compose input, .question .q-note")?.focus();
+			case "C": {
+				// c: a note on the selected file; C (or a post that is one file): on the
+				// whole post. A post that asks questions takes notes with its answer.
+				const post = selection && posts.get(selection.post);
+				if (!post) break;
+				const item = selectedItem();
+				if (event.key === "c" && item && perFile(post) && !post.questions?.length && openNote(post, item)) break;
+				document.getElementById(post.id)?.querySelector(".comments > .compose input, .question .q-note")?.focus();
 				break;
+			}
 			case "f":
 			case "Enter": {
 				const post = selection && posts.get(selection.post);

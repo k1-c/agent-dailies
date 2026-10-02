@@ -1308,6 +1308,97 @@ body.side-hidden .sidebar {
 	border-color: var(--accent);
 }
 
+/* Notes on one file: under the file, under an option's file, in full screen */
+
+.act.talk {
+	gap: 3px;
+}
+
+.act.talk svg {
+	display: block;
+}
+
+.act.talk .count {
+	font-variant-numeric: tabular-nums;
+}
+
+.act.talk .count:empty {
+	display: none;
+}
+
+.act.talk.has {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.act.talk[aria-expanded="true"] {
+	color: var(--accent);
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.thread {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px 10px 12px;
+	border-top: 1px solid var(--line);
+	cursor: auto;
+}
+
+.thread .comment-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.thread .comment-list:empty {
+	display: none;
+}
+
+.thread .comment {
+	font-size: 12.5px;
+}
+
+.o-file .thread {
+	padding: 6px 0 0;
+	border-top: none;
+}
+
+.thread[hidden],
+.note-row[hidden],
+.lightbox-notes .comment-list[hidden] {
+	display: none;
+}
+
+.note-row {
+	display: flex;
+	gap: 6px;
+}
+
+.note-input {
+	flex: 1;
+	min-width: 0;
+	padding: 5px 9px;
+	border-radius: 7px;
+	border: 1px solid var(--line);
+	background: var(--sunken);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+}
+
+.note-input:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+
+.note-row .send {
+	flex: none;
+	padding: 4px 12px;
+	font-size: 13px;
+}
+
 /* Empty state and paging */
 
 .empty {
@@ -1431,6 +1522,51 @@ body.side-hidden .sidebar {
 	text-align: center;
 	color: #cfc7bb;
 	font-size: 13px;
+}
+
+/* Full screen stays dark in either theme */
+.lightbox-notes {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: min(720px, calc(100% - 48px));
+	margin: 0 auto 18px;
+}
+
+.lightbox-notes .comment-list {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-height: 22vh;
+	overflow-y: auto;
+	color: #ece6dc;
+}
+
+.lightbox-notes .comment .who {
+	color: #9a9184;
+}
+
+.lightbox-notes .comment .who.agent {
+	color: #e8a33d;
+}
+
+.lightbox-notes .note-input {
+	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(0, 0, 0, 0.45);
+	color: #ece6dc;
+}
+
+.lightbox-notes .note-input::placeholder {
+	color: #8a8276;
+}
+
+.lightbox-notes .note-input:focus {
+	border-color: #e8a33d;
+}
+
+.lightbox-notes .send {
+	border-color: #e8a33d;
+	background: #e8a33d;
 }
 
 .lightbox-close {

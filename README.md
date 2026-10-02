@@ -46,6 +46,9 @@ yesterday's renders and decides what to keep.
   thing to sign off on above the options (`--about`), or takes a whole review
   sheet; your answers wake the agent. Questions answered from words
   alone stay in the terminal.
+- **Notes on one file** — when a post has several files, each file takes its own
+  notes (the speech-bubble button under it, or in full screen), and they show under
+  that file; the row below the post is for the post as a whole.
 - **Feedback reaches the agent** — `agent-dailies watch` exits (waking the agent)
   when you comment; hooks hand comments over before the agent stops and with your
   next message.
@@ -55,7 +58,8 @@ yesterday's renders and decides what to keep.
   desktop or a folder.
 - **Kept** — files are stored by content hash outside your repository, so they
   survive worktree cleanup and never bloat git.
-- **Keyboard first** — `j`/`k` posts, `h`/`l` files, `o` OK, `c` note,
+- **Keyboard first** — `j`/`k` posts, `h`/`l` files, `o` OK, `c` note on the file
+  (`C` on the post),
   `f` full screen, `1`–`9` choose an option, `Enter` send it,
   `y` copy (`Y` the path), `d` download, `[`/`]` move through the sidebar, `/` search.
 
