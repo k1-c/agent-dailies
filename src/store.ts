@@ -1,11 +1,12 @@
 // The store: files kept by their content hash, and an append-only log of what
-// happened to them (shown, marked, commented on).
+// happened to them (shown, marked, commented on, corrected).
 //
 // Files live under blobs/<first two hex>/<sha256><ext>, so showing the same file
 // twice keeps one copy, and a file shown from a worktree survives the worktree.
 // Events live in log/<machine>.jsonl, one JSON object per line. Each machine
 // only ever appends to its own log, so syncing the logs between machines is a
-// union and never a merge.
+// union and never a merge. Nothing is rewritten: a devlog entry is corrected or
+// retracted by a later event that readers apply to it (Catalog).
 
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -172,7 +173,56 @@ export interface IssueEvent {
 	by: Author;
 }
 
-export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent;
+/** What a correction changes in a devlog entry. Absent fields stay as they were. */
+export interface DevlogChange {
+	/** A text given replaces the entry's; "" clears it. */
+	summary?: string;
+	craft?: string;
+	struggle?: string;
+	decided?: string;
+	/** Item ids that replace that side's files; [] clears the side. */
+	before?: string[];
+	after?: string[];
+}
+
+/**
+ * A correction to a devlog entry. The entry's post event is never rewritten:
+ * readers apply its corrections in log order, later ones winning, so the log
+ * stays append-only and corrections sync like any other event.
+ */
+export interface AmendEvent {
+	type: "amend";
+	id: string;
+	at: string;
+	machine: string;
+	/** The devlog entry (post id) it corrects. */
+	post: string;
+	/** Given: replaces the entry's ("" clears it). Absent: unchanged. */
+	title?: string;
+	issue?: string;
+	devlog?: DevlogChange;
+	/** Files the correction brings, for its before/after. */
+	items?: Item[];
+	/** Why it was corrected. */
+	reason?: string;
+	session?: string;
+	by: Author;
+}
+
+/** Takes a devlog entry back (hidden from the devlog), or with `undo`, brings it back. The latest wins. */
+export interface RetractEvent {
+	type: "retract";
+	id: string;
+	at: string;
+	machine: string;
+	post: string;
+	reason?: string;
+	undo?: boolean;
+	session?: string;
+	by: Author;
+}
+
+export type DailiesEvent = PostEvent | VerdictEvent | CommentEvent | AnswerEvent | IssueEvent | AmendEvent | RetractEvent;
 
 export interface ListFilter {
 	limit?: number;
@@ -191,6 +241,8 @@ export interface ListFilter {
 	/** Only posts at or after / before these times. */
 	since?: string;
 	until?: string;
+	/** Include retracted devlog entries (left out by default). */
+	retracted?: boolean;
 }
 
 export interface SessionNode {
@@ -428,22 +480,184 @@ export function compareEvents(a: DailiesEvent, b: DailiesEvent): number {
 	return a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/** One correction applied to an entry, as readers show it. */
+export interface AmendNote {
+	id: string;
+	at: string;
+	reason?: string;
+	/** What it changed: title, issue, summary, craft, struggle, decided, before, after. */
+	fields: string[];
+	by: Author;
+	machine: string;
+}
+
+/** A post as it reads now: its event with the corrections that came later applied. */
+export interface Post extends PostEvent {
+	/** Corrections applied, oldest first. Absent when it was never corrected. */
+	amended?: AmendNote[];
+	/** Present while the entry is retracted. */
+	retracted?: { at: string; reason?: string };
+}
+
+const SECTIONS = ["summary", "craft", "struggle", "decided"] as const;
+const SIDES = ["before", "after"] as const;
+
+/**
+ * Applies one correction to an entry. `pool` holds every file the entry has
+ * had (its own and those its corrections brought), so a side can be set to any
+ * of them. Files dropped from before/after leave the entry; other files stay.
+ */
+export function applyAmend(post: Post, amend: AmendEvent, pool: Map<string, Item>): Post {
+	const devlog: DevlogInfo = { ...(post.devlog ?? { before: [], after: [], commits: [] }) };
+	const next: Post = { ...post, devlog };
+	const fields: string[] = [];
+	if (typeof amend.title === "string") {
+		next.title = amend.title || undefined;
+		fields.push("title");
+	}
+	if (typeof amend.issue === "string") {
+		next.issue = amend.issue || undefined;
+		fields.push("issue");
+	}
+	const change = amend.devlog ?? {};
+	for (const key of SECTIONS) {
+		if (typeof change[key] !== "string") continue;
+		devlog[key] = change[key] || undefined;
+		fields.push(key);
+	}
+	const wasShown = new Set([...devlog.before, ...devlog.after]);
+	let sidesChanged = false;
+	for (const side of SIDES) {
+		const ids = change[side];
+		if (!Array.isArray(ids)) continue;
+		devlog[side] = [...new Set(ids.map(String))].filter((id) => pool.has(id));
+		fields.push(side);
+		sidesChanged = true;
+	}
+	if (sidesChanged) {
+		const shown = [...new Set([...devlog.before, ...devlog.after])];
+		const rest = post.items.filter((item) => !shown.includes(item.id) && !wasShown.has(item.id));
+		next.items = [...shown.map((id) => pool.get(id)!), ...rest];
+	}
+	next.amended = [...(post.amended ?? []), { id: amend.id, at: amend.at, reason: amend.reason, fields, by: amend.by, machine: amend.machine }];
+	return next;
+}
+
+export interface AmendInput {
+	/** The entry's post id (or a viewer URL ending in #p_…). */
+	post: string;
+	title?: string;
+	issue?: string;
+	devlog?: DevlogChange;
+	items?: Item[];
+	reason?: string;
+	session?: string;
+	by?: Author;
+}
+
+/** The post id in `p_…` or in a viewer URL (`http://…/#p_…`). */
+export function postIdOf(ref: string): string {
+	return /(?:^|#)(p_[a-z0-9]+)$/.exec(String(ref).trim())?.[1] ?? String(ref).trim();
+}
+
+/** The devlog entry a correction or a retraction is for, or why there is none. */
+export function devlogEntry(catalog: Catalog, ref: string): Post {
+	const id = postIdOf(ref);
+	const post = catalog.post(id);
+	if (!post) throw new Error(`no devlog entry ${id || "(none given)"}; \`agent-dailies devlog list --all\` shows the entries and their ids`);
+	if (post.kind !== "devlog") throw new Error(`${id} is not a devlog entry; only devlog entries can be edited or retracted`);
+	return post;
+}
+
+/** Checks a correction against the entry and returns its event. Throws when it cannot apply. */
+export function buildAmend(input: AmendInput, catalog: Catalog, machine: string, at: Date = new Date()): AmendEvent {
+	const post = devlogEntry(catalog, input.post);
+	if (post.retracted) throw new Error(`${post.id} is retracted; bring it back first with \`agent-dailies devlog retract ${post.id} --undo\``);
+	const text = (value: unknown) => (typeof value === "string" ? value.trim() : undefined);
+	const items = Array.isArray(input.items) ? input.items : [];
+	const pool = new Map([...catalog.itemsOf(post.id), ...items].map((item) => [item.id, item]));
+	const change: DevlogChange = {};
+	for (const key of SECTIONS) {
+		const value = text(input.devlog?.[key]);
+		if (value !== undefined) change[key] = value;
+	}
+	for (const side of SIDES) {
+		const ids = input.devlog?.[side];
+		if (ids === undefined) continue;
+		if (!Array.isArray(ids)) throw new Error(`${side} must be a list of file ids`);
+		for (const id of ids) if (!pool.has(String(id))) throw new Error(`${side}: ${id} is not a file of this correction or of ${post.id}`);
+		change[side] = ids.map(String);
+	}
+	const event: AmendEvent = {
+		type: "amend",
+		id: newId("e", at.getTime()),
+		at: at.toISOString(),
+		machine,
+		post: post.id,
+		title: text(input.title),
+		issue: text(input.issue),
+		devlog: Object.keys(change).length ? change : undefined,
+		items: items.length ? items : undefined,
+		reason: text(input.reason) || undefined,
+		session: input.session || undefined,
+		by: input.by === "human" ? "human" : "agent",
+	};
+	if (event.title === undefined && event.issue === undefined && !event.devlog) throw new Error("nothing to change in the entry");
+	const result = applyAmend(post, event, pool);
+	if (!result.title && !result.devlog?.summary) throw new Error("a devlog entry needs a title or a summary");
+	return event;
+}
+
+export interface RetractInput {
+	post: string;
+	reason?: string;
+	undo?: boolean;
+	session?: string;
+	by?: Author;
+}
+
+export function buildRetract(input: RetractInput, catalog: Catalog, machine: string, at: Date = new Date()): RetractEvent {
+	const post = devlogEntry(catalog, input.post);
+	if (input.undo && !post.retracted) throw new Error(`${post.id} is not retracted`);
+	if (!input.undo && post.retracted) throw new Error(`${post.id} is already retracted`);
+	return {
+		type: "retract",
+		id: newId("r", at.getTime()),
+		at: at.toISOString(),
+		machine,
+		post: post.id,
+		reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : undefined,
+		undo: input.undo ? true : undefined,
+		session: input.session || undefined,
+		by: input.by === "human" ? "human" : "agent",
+	};
+}
+
 export interface ItemView extends Item {
 	verdict: Verdict | null;
 }
 
-export interface PostView extends Omit<PostEvent, "items"> {
+export interface PostView extends Omit<Post, "items"> {
 	items: ItemView[];
 	comments: CommentEvent[];
 	/** The latest answer to each question, by question id. */
 	answers: Record<string, AnswerEvent>;
+	/** The entry as it was first recorded, when it has been corrected since. */
+	original?: PostEvent;
 }
 
 /** The state the events add up to. */
 export class Catalog {
-	readonly posts: PostEvent[] = [];
-	private readonly postsById = new Map<string, PostEvent>();
+	/** Posts in log order, each as it reads now (corrections applied). */
+	readonly posts: Post[] = [];
+	private readonly postsById = new Map<string, Post>();
+	private readonly postIndex = new Map<string, number>();
+	private readonly originals = new Map<string, PostEvent>();
+	private readonly amends = new Map<string, AmendEvent[]>();
+	private readonly retracts = new Map<string, RetractEvent>();
 	private readonly itemPost = new Map<string, string>();
+	/** Every file any post or correction has carried, so files replaced by a correction still resolve. */
+	private readonly itemsById = new Map<string, Item>();
 	private readonly verdicts = new Map<string, VerdictEvent>();
 	private readonly comments = new Map<string, CommentEvent[]>();
 	private readonly answers = new Map<string, Map<string, AnswerEvent>>();
@@ -454,10 +668,30 @@ export class Catalog {
 		switch (event.type) {
 			case "post":
 				if (this.postsById.has(event.id)) return;
+				this.postIndex.set(event.id, this.posts.length);
 				this.posts.push(event);
 				this.postsById.set(event.id, event);
-				for (const item of event.items) this.itemPost.set(item.id, event.id);
+				this.originals.set(event.id, event);
+				for (const item of event.items) this.noteItem(item, event.id);
+				// A correction from a machine whose clock ran ahead may come first.
+				if (this.amends.has(event.id) || this.retracts.has(event.id)) this.rebuild(event.id);
 				break;
+			case "amend": {
+				const list = this.amends.get(event.post) ?? [];
+				if (list.some((known) => known.id === event.id)) return;
+				list.push(event);
+				list.sort(compareEvents);
+				this.amends.set(event.post, list);
+				for (const item of event.items ?? []) this.noteItem(item, event.post);
+				this.rebuild(event.post);
+				break;
+			}
+			case "retract": {
+				const previous = this.retracts.get(event.post);
+				if (!previous || compareEvents(previous, event) < 0) this.retracts.set(event.post, event);
+				this.rebuild(event.post);
+				break;
+			}
 			case "verdict": {
 				const previous = this.verdicts.get(event.item);
 				if (!previous || compareEvents(previous, event) < 0) this.verdicts.set(event.item, event);
@@ -488,25 +722,70 @@ export class Catalog {
 		}
 	}
 
-	post(id: string): PostEvent | undefined {
+	private noteItem(item: Item, postId: string): void {
+		if (this.itemsById.has(item.id)) return;
+		this.itemsById.set(item.id, item);
+		this.itemPost.set(item.id, postId);
+	}
+
+	// Recomputes how a devlog entry reads from its event and every correction,
+	// in log order, so the result does not depend on the order they arrived in.
+	private rebuild(id: string): void {
+		const original = this.originals.get(id);
+		const index = this.postIndex.get(id);
+		if (!original || index === undefined || original.kind !== "devlog") return;
+		const pool = new Map(original.items.map((item) => [item.id, item]));
+		let post: Post = original;
+		for (const amend of this.amends.get(id) ?? []) {
+			for (const item of amend.items ?? []) if (!pool.has(item.id)) pool.set(item.id, item);
+			post = applyAmend(post, amend, pool);
+		}
+		const retract = this.retracts.get(id);
+		if (retract && !retract.undo) post = { ...post, retracted: { at: retract.at, reason: retract.reason } };
+		this.posts[index] = post;
+		this.postsById.set(id, post);
+	}
+
+	post(id: string): Post | undefined {
 		return this.postsById.get(id);
 	}
 
-	postOfItem(itemId: string): PostEvent | undefined {
+	/** The post a file belongs to (for a file a correction replaced, the entry it was in). */
+	postOfItem(itemId: string): Post | undefined {
 		const postId = this.itemPost.get(itemId);
 		return postId ? this.postsById.get(postId) : undefined;
+	}
+
+	/** Any file a post or a correction has carried. */
+	item(itemId: string): Item | undefined {
+		return this.itemsById.get(itemId);
+	}
+
+	/** Every file a post has had: its own and those its corrections brought. */
+	itemsOf(postId: string): Item[] {
+		const original = this.originals.get(postId);
+		if (!original) return [];
+		return [...original.items, ...(this.amends.get(postId) ?? []).flatMap((amend) => amend.items ?? [])];
+	}
+
+	/** The commits recorded in devlog entries that stand (not retracted). */
+	recordedCommits(): Set<string> {
+		return new Set(
+			this.posts.filter((post) => post.kind === "devlog" && !post.retracted).flatMap((post) => (post.devlog?.commits ?? []).map((commit) => commit.sha)),
+		);
 	}
 
 	verdictOf(itemId: string): Verdict | null {
 		return this.verdicts.get(itemId)?.verdict ?? null;
 	}
 
-	view(post: PostEvent): PostView {
+	view(post: Post): PostView {
 		return {
 			...post,
 			items: post.items.map((item) => ({ ...item, verdict: this.verdictOf(item.id) })),
 			comments: this.comments.get(post.id) ?? [],
 			answers: Object.fromEntries(this.answers.get(post.id) ?? []),
+			original: post.amended ? this.originals.get(post.id) : undefined,
 		};
 	}
 
@@ -523,7 +802,8 @@ export class Catalog {
 		return key ? this.issues.get(key.toUpperCase()) : undefined;
 	}
 
-	matches(post: PostEvent, filter: ListFilter): boolean {
+	matches(post: Post, filter: ListFilter): boolean {
+		if (post.retracted && !filter.retracted) return false;
 		if (filter.project && post.project !== filter.project) return false;
 		if (filter.lane && post.lane !== filter.lane) return false;
 		if (filter.issue && post.issue?.toLowerCase() !== filter.issue.toLowerCase()) return false;
@@ -581,6 +861,7 @@ export class Catalog {
 		const groups = new Map<string, GroupNode>();
 		const sessions = new Map<string, SessionNode>();
 		for (const post of this.posts) {
+			if (post.retracted) continue;
 			if (kind === "devlog" && post.kind !== "devlog") continue;
 			if (kind === "review" && post.kind === "devlog") continue;
 			const open = this.openQuestions(post).length;

@@ -559,7 +559,8 @@
 
 	// ---- devlog entries ----
 
-	function buildDevlog(post) {
+	// `plain` draws an entry as first recorded (under a corrected one): files without actions.
+	function buildDevlog(post, { plain = false } = {}) {
 		const parts = [];
 		const info = post.devlog || {};
 		if (info.summary) parts.push(el("div", { class: "devlog-summary" }, [markdown(info.summary)]));
@@ -571,7 +572,7 @@
 			const items = ids.map((id) => post.items.find((item) => item.id === id)).filter(Boolean);
 			const grid = el("div", { class: "grid", "data-columns": String(Math.min(items.length, 2) || 1) });
 			grid.style.setProperty("--columns", String(Math.min(items.length, 2) || 1));
-			items.forEach((item) => grid.append(buildTile(post, item, post.items.indexOf(item))));
+			items.forEach((item) => grid.append(plain ? plainTile(item) : buildTile(post, item, post.items.indexOf(item))));
 			return el("div", { class: "ba-side" }, [el("div", { class: "ba-label", text: label }), grid]);
 		};
 		if (info.before?.length || info.after?.length) {
@@ -582,6 +583,7 @@
 				]),
 			);
 		}
+		if (plain) return parts;
 		if (info.commits?.length) {
 			const list = el(
 				"ul",
@@ -590,7 +592,47 @@
 			);
 			parts.push(el("details", { class: "commit-list" }, [el("summary", { text: t.commits(info.commits.length) }), list]));
 		}
+		const original = buildOriginal(post);
+		if (original) parts.push(original);
 		return parts;
+	}
+
+	function plainTile(item) {
+		return el("article", { class: "tile plain" }, [
+			el("div", { class: "stage", "data-kind": item.kind }, [media(item)]),
+			el("div", { class: "tile-foot" }, [el("span", { class: "name", title: item.source || item.name, text: item.name }), el("span", { class: "size", text: size(item.size) })]),
+		]);
+	}
+
+	// A corrected entry: when, what and why, one line per correction.
+	function buildAmendNotes(post) {
+		const edits = post.amended || [];
+		if (!edits.length) return null;
+		return el(
+			"div",
+			{ class: "amended" },
+			edits.map((edit) =>
+				el("div", { class: "amend-line" }, [
+					el("span", { class: "amend-mark", text: `✎ ${t.edited}` }),
+					el("time", { class: "time", datetime: edit.at, title: new Date(edit.at).toLocaleString(), text: ago(edit.at) }),
+					edit.fields?.length ? el("span", { class: "amend-fields", text: edit.fields.map((field) => t.fieldNames[field] || field).join(t.listSep) }) : null,
+					edit.reason ? el("span", { class: "amend-reason", text: edit.reason }) : null,
+				]),
+			),
+		);
+	}
+
+	// The entry as first recorded, folded away; drawn only when opened.
+	function buildOriginal(post) {
+		const original = post.original;
+		if (!original || !post.amended?.length) return null;
+		const body = el("div", { class: "original-body" });
+		const details = el("details", { class: "original" }, [el("summary", { text: t.showOriginal }), body]);
+		details.addEventListener("toggle", () => {
+			if (!details.open || body.childElementCount) return;
+			body.append(el("div", { class: "original-title", text: original.title || t.untitled }), ...buildDevlog(original, { plain: true }));
+		});
+		return details;
 	}
 
 	// ---- questions ----
@@ -898,6 +940,8 @@
 		if (post.questions?.length) meta.prepend(el("span", { class: "chip state" }));
 		if (post.kind === "devlog") meta.prepend(el("span", { class: "chip devlog", text: t.devlog }));
 		node.append(el("header", { class: "post-head" }, [el("h2", { class: "post-title", text: title }), meta]));
+		const amended = buildAmendNotes(post);
+		if (amended) node.append(amended);
 		if (post.note) node.append(el("p", { class: "note", text: post.note }));
 		for (const question of post.questions || []) node.append(buildQuestion(post, question));
 		if (post.kind === "devlog") node.append(...buildDevlog(post));
@@ -991,6 +1035,29 @@
 		}
 		renderEmpty();
 		renderOpen();
+	}
+
+	// A devlog entry was corrected or retracted: redraw it in place, or take it out.
+	function replacePost(post) {
+		const node = document.getElementById(post.id);
+		if (!posts.has(post.id) || !node) {
+			// Brought back (undo): it belongs in the devlog again.
+			if (mode === "devlog" && !post.retracted && post.kind === "devlog") loadState({ reset: true }).catch((error) => console.error(error));
+			else refreshTree();
+			return;
+		}
+		if (post.retracted) {
+			posts.delete(post.id);
+			order.splice(order.indexOf(post.id), 1);
+			node.remove();
+		} else {
+			posts.set(post.id, post);
+			node.replaceWith(buildPostElement(post));
+		}
+		if (mode === "devlog") placeSeparators();
+		applySelection(selection && posts.has(selection.post) ? selection : null);
+		renderEmpty();
+		refreshTree();
 	}
 
 	function setVerdict(itemId, verdict) {
@@ -1725,6 +1792,8 @@
 			setVerdict(data.item, data.verdict);
 		});
 		source.addEventListener("comment", (event) => addComment(JSON.parse(event.data)));
+		source.addEventListener("amend", (event) => replacePost(JSON.parse(event.data).post));
+		source.addEventListener("retract", (event) => replacePost(JSON.parse(event.data).post));
 		source.addEventListener("answer", (event) => applyAnswer(JSON.parse(event.data)));
 		source.addEventListener("select", (event) => {
 			const data = JSON.parse(event.data);

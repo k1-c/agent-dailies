@@ -17,18 +17,26 @@ import { guideText, preToolUse } from "./hook.ts";
 import { dueForRefresh, fetchIssue, ISSUE_KEY, issueCommandFor, markFetched, sameIssue, type IssueInfo } from "./issues.ts";
 import { DailiesServer, type Context } from "./server.ts";
 import {
+	buildAmend,
 	buildPost,
+	buildRetract,
+	devlogEntry,
 	newId,
 	Store,
+	type AmendEvent,
+	type AmendInput,
 	type AnswerEvent,
 	type Catalog,
 	type CommitRef,
 	type IssueEvent,
 	type CommentEvent,
+	type DevlogChange,
 	type Item,
 	type PostInput,
 	type PostView,
 	type Question,
+	type RetractEvent,
+	type RetractInput,
 	type Selection,
 	type VerdictEvent,
 } from "./store.ts";
@@ -60,9 +68,10 @@ Usage:
   agent-dailies issue [KEY] [--refresh] [--title T] [--description TEXT|-] [--status S] [--url U]
                                       Show or set what an issue is about (the viewer's issue card).
                                       --refresh runs your issueCommand (config file) for it.
-  agent-dailies devlog <add|list|summary|sweep> …
-                                      The devlog: record what changed (with before/after), and gather a
-                                      period's entries, decisions, commits and transcripts for a summary
+  agent-dailies devlog <add|edit|retract|list|summary|sweep> …
+                                      The devlog: record what changed (with before/after), correct or
+                                      retract an entry, and gather a period's entries, decisions,
+                                      commits and transcripts for a summary
   agent-dailies get <item-id|post-id:n> [--to PATH]
                                       Print a stored file's path, or copy it to PATH
   agent-dailies open                  Open the viewer in the browser
@@ -679,7 +688,7 @@ async function get(args: string[]): Promise<void> {
 	let item: Item | undefined;
 	const numbered = /^(p_[a-z0-9]+):(\d+)$/.exec(ref);
 	if (numbered) item = catalog.post(numbered[1]!)?.items[Number(numbered[2]) - 1];
-	else item = catalog.postOfItem(ref)?.items.find((candidate) => candidate.id === ref);
+	else item = catalog.item(ref);
 	if (!item) throw new Error(`no item ${ref}`);
 	const path = target.blobPath(item.sha256, item.ext);
 	if (values.to) {
@@ -783,7 +792,20 @@ const DEVLOG_HELP = `Usage:
       files already shown (i_…). Only merged work is recorded: by default the session's commits
       that have landed on the main branch (and not in an entry yet) are attached, and their issue
       from the merged branch; work still on a branch is refused until it is merged.
+  agent-dailies devlog edit <entry-id> [--title T] [--summary TEXT|-] [--craft TEXT] [--struggle TEXT]
+                            [--decided TEXT] [--before FILE|ITEM…] [--after FILE|ITEM…]
+                            [--no-before] [--no-after] [--issue KEY] [--reason TEXT] [--json]
+      Correct a recorded entry (its id is the p_… that \`devlog add\` and \`devlog list\` print). What
+      you give replaces the entry's: --summary replaces the summary, and the "## 工夫", "## 苦労",
+      "## 決めたこと" sections only when its text has them (the others stay; --craft "" clears one).
+      --before/--after replace that side's files (files or i_… ids); --no-before/--no-after clear
+      it. --reason says why, and is shown with the entry. The store is append-only: the correction
+      is a new event and the entry's first record stays in the log; readers show the corrected one.
+  agent-dailies devlog retract <entry-id> [--reason TEXT] [--undo]
+      Take back an entry that should not have been recorded: it leaves devlog list, summary and the
+      Devlog tab (devlog list --all still shows it, marked). --undo brings it back. Nothing is deleted.
   agent-dailies devlog list [--since 7d|DATE] [--all] [--json]
+      Recent entries of this project (--all: every project, and retracted entries too).
   agent-dailies devlog summary --since DATE|7d [--until DATE] [--all] [--json]
       Everything recorded in a period: entries, decisions, commits, transcripts — the material to
       write an update or a devlog post from. Take --since from the previous update itself (when it
@@ -793,7 +815,7 @@ const DEVLOG_HELP = `Usage:
 // A file to attach, or the id of a file already in the store (reused, not copied again).
 async function itemFrom(target: Store, catalog: Catalog, ref: string): Promise<Item> {
 	if (/^i_[a-z0-9]+$/.test(ref)) {
-		const known = catalog.postOfItem(ref)?.items.find((item) => item.id === ref);
+		const known = catalog.item(ref);
 		if (known) return { ...known, id: newId("i") };
 	}
 	if (!existsSync(ref)) throw new Error(`no such file or item: ${ref}`);
@@ -825,7 +847,7 @@ ${later}`);
 		}
 		return { commits, refs: [], notes: [] };
 	}
-	const recorded = new Set(catalog.posts.filter((post) => post.kind === "devlog").flatMap((post) => (post.devlog?.commits ?? []).map((commit) => commit.sha)));
+	const recorded = catalog.recordedCommits();
 	const state = where.session ? readSession(target, where.session) : {};
 	const landed = landedWork(state, repo)[0];
 	const commits = (landed?.commits ?? []).filter((commit) => !recorded.has(commit.sha));
@@ -905,15 +927,179 @@ async function devlogAdd(args: string[]): Promise<void> {
 	if (ids.before.length || ids.after.length) lines.push(`  before ${ids.before.length} · after ${ids.after.length}`);
 	if (commits.length) lines.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}: ${commits.map((commit) => commit.sha.slice(0, 8)).join(" ")}`);
 	lines.push(...notes);
+	const edit = `agent-dailies devlog edit ${published.post.id}`;
 	const missing = [!craft && "craft (工夫)", !struggle && "struggle (苦労)"].filter(Boolean);
-	if (missing.length) lines.push(`No ${missing.join(" or ")} written. If there was any, add it: these are what devlog videos are made of.`);
+	if (missing.length) lines.push(`No ${missing.join(" or ")} written. If there was any, add it (${edit} --craft … --struggle …): these are what devlog videos are made of.`);
 	if (!ids.before.length || !ids.after.length) {
 		lines.push(
-			"No before/after pair. If the change can be seen or heard (looks, UI, motion, feel, sound), add both: --before <file|i_…> --after <file|i_…>",
+			`No before/after pair. If the change can be seen or heard (looks, UI, motion, feel, sound), add both: ${edit} --before <file|i_…> --after <file|i_…>`,
 			"(images, or short videos when the change is in motion, timing, feel or sound).",
 		);
 	}
+	lines.push(`To correct it later: ${edit} … --reason "<why>" (or agent-dailies devlog retract ${published.post.id}).`);
 	out(lines.join("\n"));
+}
+
+const EDIT_USAGE = `Usage: agent-dailies devlog edit <entry-id> [--title T] [--summary TEXT|-] [--craft TEXT] [--struggle TEXT] [--decided TEXT]
+                                 [--before FILE|ITEM…] [--after FILE|ITEM…] [--no-before] [--no-after] [--issue KEY] [--reason TEXT] [--json]`;
+const RETRACT_USAGE = "Usage: agent-dailies devlog retract <entry-id> [--reason TEXT] [--undo] [--json]";
+
+// Hands a correction or a retraction to the viewer, which records it and updates
+// open pages. Writes the log directly only when the viewer cannot start.
+async function recordEntryEvent(target: Store, catalog: Catalog, path: string, input: AmendInput | RetractInput, event: AmendEvent | RetractEvent): Promise<PostView> {
+	let viewer: Client;
+	try {
+		viewer = await ensureServer({ host: config.host(), port: config.port(), home: target.home });
+	} catch (error) {
+		target.append(event);
+		catalog.apply(event);
+		process.stderr.write(`agent-dailies: the viewer is not running (${error instanceof Error ? error.message : error}); the change is saved.\n`);
+		return catalog.view(catalog.post(event.post)!);
+	}
+	return (await viewer.post<{ post: PostView }>(path, input)).post;
+}
+
+function entryName(post: { id: string; title?: string }): string {
+	return `${post.id}${post.title ? ` ("${post.title}")` : ""}`;
+}
+
+async function devlogEdit(args: string[]): Promise<void> {
+	const { values: parsed, tokens } = parseArgs({
+		args,
+		options: {
+			title: { type: "string", short: "t" },
+			summary: { type: "string", short: "s" },
+			craft: { type: "string" },
+			struggle: { type: "string" },
+			decided: { type: "string" },
+			before: { type: "boolean" },
+			after: { type: "boolean" },
+			"no-before": { type: "boolean" },
+			"no-after": { type: "boolean" },
+			issue: { type: "string" },
+			reason: { type: "string" },
+			json: { type: "boolean" },
+			help: { type: "boolean", short: "h" },
+		},
+		allowPositionals: true,
+		tokens: true,
+	});
+	const values = parsed as Values;
+	if (values.help) return out(EDIT_USAGE);
+	// As in add: the files after --before belong to it, those after --after to it.
+	const refs: Record<"plain" | "before" | "after", string[]> = { plain: [], before: [], after: [] };
+	const given = { before: false, after: false };
+	let bucket: keyof typeof refs = "plain";
+	for (const token of tokens) {
+		if (token.kind === "option" && (token.name === "before" || token.name === "after")) {
+			bucket = token.name;
+			given[token.name] = true;
+		} else if (token.kind === "positional") refs[bucket].push(token.value);
+	}
+	const [ref, ...extra] = refs.plain;
+	if (!ref) throw new Error(`which entry? Give its id (p_…, from \`agent-dailies devlog list\`).\n${EDIT_USAGE}`);
+	if (extra.length) throw new Error(`unexpected ${extra.join(" ")}: files go after --before or --after.\n${EDIT_USAGE}`);
+	for (const side of ["before", "after"] as const) {
+		if (given[side] && values[`no-${side}`]) throw new Error(`--${side} and --no-${side} cannot go together`);
+		if (given[side] && !refs[side].length) throw new Error(`--${side} needs files (or i_… ids); --no-${side} clears that side`);
+	}
+
+	const target = store();
+	const catalog = target.load();
+	const entry = devlogEntry(catalog, ref);
+
+	// A summary replaces the summary, and only the sections its text has (the rest stay).
+	const raw = values.summary === "-" ? readFileSync(0, "utf8") : (values.summary as string | undefined);
+	const sections = raw === undefined ? {} : splitSections(raw);
+	const devlog: DevlogChange = {};
+	if (raw !== undefined && (raw.trim() === "" || sections.summary !== undefined)) devlog.summary = sections.summary ?? "";
+	for (const key of ["craft", "struggle", "decided"] as const) {
+		const text = (values[key] as string | undefined) ?? sections[key];
+		if (text !== undefined) devlog[key] = text;
+	}
+	const changesSides = given.before || given.after || values["no-before"] || values["no-after"];
+	if (values.title === undefined && values.issue === undefined && !Object.keys(devlog).length && !changesSides) {
+		throw new Error(`nothing to change: give what replaces the entry's (--title, --summary, a section, --before/--after, --no-before/--no-after, --issue).\n${EDIT_USAGE}`);
+	}
+	const items: Item[] = [];
+	for (const side of ["before", "after"] as const) {
+		if (values[`no-${side}`]) devlog[side] = [];
+		else if (given[side]) {
+			const ids: string[] = [];
+			for (const file of refs[side]) {
+				const item = await itemFrom(target, catalog, file);
+				items.push(item);
+				ids.push(item.id);
+			}
+			devlog[side] = ids;
+		}
+	}
+	const input: AmendInput = {
+		post: entry.id,
+		title: values.title as string | undefined,
+		issue: values.issue as string | undefined,
+		devlog,
+		items,
+		reason: values.reason as string | undefined,
+		session: detectWhere().session,
+		by: "agent",
+	};
+	const event = buildAmend(input, catalog, target.machine);
+	const post = await recordEntryEvent(target, catalog, "api/amend", input, event);
+	const url = `${baseUrl(config.host(), config.port())}#${post.id}`;
+	if (values.json) return out(JSON.stringify({ post, url }, null, 2));
+	const changed = post.amended?.at(-1)?.fields ?? [];
+	const lines = [`Corrected the devlog entry ${entryName(post)}: ${changed.join(", ")}. ${url}`];
+	lines.push("Its first record stays in the store; list, summary and the viewer show the corrected entry.");
+	const before = post.devlog?.before.length ?? 0;
+	const after = post.devlog?.after.length ?? 0;
+	if (changesSides) {
+		lines.push(`  before ${before} · after ${after}`);
+		if (!before && !after) lines.push("It has no before/after now. If the change can be seen or heard, add them: --before <file|i_…> --after <file|i_…>.");
+		else if (!before) lines.push("It shows only an after now — fine when the before cannot be captured any more.");
+		else if (!after) lines.push("It shows only a before now; add the after with --after <file|i_…>.");
+	}
+	if (!values.reason) lines.push("Tip: --reason \"<why>\" keeps a short note of why it was corrected.");
+	out(lines.join("\n"));
+}
+
+async function devlogRetract(args: string[]): Promise<void> {
+	const { values, positionals } = parse(args, { reason: { type: "string" }, undo: { type: "boolean" }, json: { type: "boolean" } });
+	if (values.help) return out(RETRACT_USAGE);
+	const [ref, ...extra] = positionals;
+	if (!ref) throw new Error(`which entry? Give its id (p_…, from \`agent-dailies devlog list\`).\n${RETRACT_USAGE}`);
+	if (extra.length) throw new Error(`unexpected ${extra.join(" ")}.\n${RETRACT_USAGE}`);
+	const target = store();
+	const catalog = target.load();
+	const input: RetractInput = {
+		post: ref,
+		reason: values.reason as string | undefined,
+		undo: Boolean(values.undo),
+		session: detectWhere().session,
+		by: "agent",
+	};
+	const event = buildRetract(input, catalog, target.machine);
+	const post = await recordEntryEvent(target, catalog, "api/retract", input, event);
+	if (values.json) return out(JSON.stringify({ post }, null, 2));
+	out(
+		values.undo
+			? `Brought back the devlog entry ${entryName(post)}.`
+			: [
+					`Retracted the devlog entry ${entryName(post)}: it no longer appears in devlog list, summary or the viewer's Devlog tab.`,
+					`Nothing is deleted: \`agent-dailies devlog list --all\` still shows it, and \`agent-dailies devlog retract ${post.id} --undo\` brings it back.`,
+				].join("\n"),
+	);
+}
+
+function entryMarks(entry: PostView): string {
+	const marks: string[] = [];
+	const edits = entry.amended ?? [];
+	if (edits.length) {
+		const reason = edits.at(-1)!.reason;
+		marks.push(`[edited${edits.length > 1 ? ` ${edits.length}×` : ""}${reason ? `: ${reason}` : ""}]`);
+	}
+	if (entry.retracted) marks.push(`[retracted${entry.retracted.reason ? `: ${entry.retracted.reason}` : ""}]`);
+	return marks.length ? ` ${marks.join(" ")}` : "";
 }
 
 async function devlog(args: string[]): Promise<void> {
@@ -922,19 +1108,24 @@ async function devlog(args: string[]): Promise<void> {
 	switch (sub) {
 		case "add":
 			return devlogAdd(rest);
+		case "edit":
+			return devlogEdit(rest);
+		case "retract":
+			return devlogRetract(rest);
 		case "list": {
 			const { values } = parse(rest, { since: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" } });
 			const where = detectWhere();
 			const entries = target.load().list({
 				kind: "devlog",
 				since: since(values.since as string | undefined, 30 * 86_400_000),
+				retracted: Boolean(values.all),
 				...(values.all ? {} : { project: where.project }),
 			});
 			if (values.json) return out(JSON.stringify(entries, null, 2));
 			if (!entries.length) return out("No devlog entries in that period.");
 			return out(
 				entries
-					.map((entry) => `- ${entry.at.slice(0, 16)} ${entry.issue ? `${entry.issue} ` : ""}${entry.title ?? "(untitled)"} (${entry.id})`)
+					.map((entry) => `- ${entry.at.slice(0, 16)} ${entry.issue ? `${entry.issue} ` : ""}${entry.title ?? "(untitled)"} (${entry.id})${entryMarks(entry)}`)
 					.join("\n"),
 			);
 		}
@@ -1058,7 +1249,7 @@ function devlogReminder(target: Store, catalog: Catalog, session: string): boole
 	if (process.env.AGENT_DAILIES_DEVLOG === "0") return false;
 	const state = readSession(target, session);
 	if (!state.merges?.length && !state.direct?.length) return false;
-	const recorded = new Set(catalog.posts.filter((post) => post.kind === "devlog").flatMap((post) => (post.devlog?.commits ?? []).map((commit) => commit.sha)));
+	const recorded = catalog.recordedCommits();
 	const reminded = new Set(state.devlogRemindedFor ?? []);
 	const fresh = landedWork(state)
 		.map((landed) => ({ ...landed, commits: landed.commits.filter((commit) => !recorded.has(commit.sha) && !reminded.has(commit.sha)) }))

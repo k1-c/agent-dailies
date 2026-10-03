@@ -172,6 +172,11 @@ Devlog — a record of how the work changed, for updates and devlog videos later
   notices. The merged commits and their issue are attached; \`devlog add\` refuses
   work that is not on the main branch yet. The Stop hook reminds you once after a
   merge lands.
+- Recorded something wrong (a wrong before, a mistaken line)? Correct the entry:
+  \`agent-dailies devlog edit <p_…> --before <file|i_…> --reason "<why>"\` (also --title,
+  --summary, --craft, --struggle, --decided, --after, --no-before), or take it back with
+  \`agent-dailies devlog retract <p_…> --reason "<why>"\`. Nothing is deleted from the
+  store; the correction is kept beside the entry.
 - To write an update ("what happened since the last one"), take the period from
   the previous update itself (when it ended), then read
   \`agent-dailies devlog summary --since "<that time>"\` (entries, decisions, commits,

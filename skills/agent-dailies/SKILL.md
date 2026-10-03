@@ -144,6 +144,25 @@ EOF
   (`--commits A..B` must be on it too; `none` for work without commits). The Stop
   hook reminds you once after a merge lands — that is the moment to record.
 
+**Correcting an entry.** Recorded a wrong before, or a line that is not true? Fix
+the entry rather than adding another — what you give replaces the entry's, and the
+rest stays:
+
+```sh
+agent-dailies devlog edit p_mupkr0a1b2c3 --before shots/cape_before.png --reason "the before was from the wrong commit"
+agent-dailies devlog edit p_mupkr0a1b2c3 --summary - <<'EOF'    # only the sections the text has are replaced
+## 苦労
+The hood clipped the horns until it was left out by vertex group.
+EOF
+agent-dailies devlog retract p_mupkr0a1b2c3 --reason "recorded twice"   # take it back (--undo brings it back)
+```
+
+Also `--title`, `--craft`, `--struggle`, `--decided`, `--after`, `--issue`, and
+`--no-before` / `--no-after` (an entry may keep only its after when the before cannot
+be captured). The id is the `p_…` that `devlog add` and `devlog list` print. Nothing
+is deleted from the store: corrections and retractions are kept beside the entry, and
+`devlog list --all` still shows retracted ones.
+
 To write an update or a devlog post ("since the last one"), take the period from the
 previous update itself (when it ended — its date, or the notes kept with it):
 

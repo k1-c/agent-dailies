@@ -872,6 +872,62 @@ body.side-hidden .sidebar {
 	letter-spacing: 0.06em;
 }
 
+/* A corrected entry: one line per correction, and the first record folded away. */
+
+.amended {
+	display: grid;
+	gap: 2px;
+	padding: 0 16px 8px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.amend-line {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	align-items: baseline;
+}
+
+.amend-mark {
+	color: var(--accent);
+	font-weight: 650;
+}
+
+.amend-fields {
+	color: var(--faint);
+}
+
+.amend-reason {
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.original {
+	margin: 0 16px 12px;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.original summary {
+	cursor: pointer;
+	color: var(--faint);
+}
+
+.original-body {
+	margin-top: 8px;
+	padding: 10px 0 4px;
+	border: 1px dashed var(--line-strong);
+	border-radius: 8px;
+	opacity: 0.85;
+}
+
+.original-title {
+	padding: 0 16px 8px;
+	color: var(--text);
+	font-weight: 650;
+}
+
 .day-sep {
 	margin: 10px 2px -6px;
 	color: var(--muted);

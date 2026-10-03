@@ -13,8 +13,12 @@ import { compareVersions, version } from "./config.ts";
 import { disposition, namedPath, needsTranscode, playableVideo, safeName } from "./files.ts";
 import { ISSUE_KEY, sameIssue, type IssueInfo } from "./issues.ts";
 import {
+	type AmendEvent,
+	type AmendInput,
 	type AnswerEvent,
+	buildAmend,
 	buildPost,
+	buildRetract,
 	Catalog,
 	newId,
 	Store,
@@ -27,6 +31,8 @@ import {
 	type PostEvent,
 	type PostInput,
 	type PostView,
+	type RetractEvent,
+	type RetractInput,
 	type Selection,
 	type Verdict,
 	type VerdictEvent,
@@ -236,14 +242,47 @@ export class DailiesServer {
 		return event;
 	}
 
+	/** Corrects a devlog entry (a new event; the entry's own event stays as it was). */
+	amend(input: AmendInput): { amend: AmendEvent; post: PostView } {
+		const event = this.entryEvent(input.post, () => buildAmend(input, this.catalog, this.store.machine));
+		this.record(event);
+		const post = this.catalog.view(this.catalog.post(event.post)!);
+		this.broadcast("amend", { amend: event, post });
+		return { amend: event, post };
+	}
+
+	/** Takes a devlog entry back, or brings it back (undo). */
+	retract(input: RetractInput): { retract: RetractEvent; post: PostView } {
+		const event = this.entryEvent(input.post, () => buildRetract(input, this.catalog, this.store.machine));
+		this.record(event);
+		const post = this.catalog.view(this.catalog.post(event.post)!);
+		this.broadcast("retract", { retract: event, post });
+		return { retract: event, post };
+	}
+
+	private entryEvent<T>(ref: unknown, build: () => T): T {
+		if (typeof ref !== "string" || !ref) throw new HttpError(400, "post is required");
+		try {
+			return build();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new HttpError(message.startsWith("no devlog entry") ? 404 : 400, message);
+		}
+	}
+
 	counts(): { devlog: number; review: number; open: number } {
 		let devlog = 0;
+		let review = 0;
 		let open = 0;
 		for (const post of this.catalog.posts) {
+			if (post.retracted) continue;
 			if (post.kind === "devlog") devlog++;
-			else open += this.catalog.openQuestions(post).length;
+			else {
+				review++;
+				open += this.catalog.openQuestions(post).length;
+			}
 		}
-		return { devlog, review: this.catalog.posts.length - devlog, open };
+		return { devlog, review, open };
 	}
 
 	/** Records what is known about an issue, unless nothing changed. */
@@ -357,6 +396,12 @@ export class DailiesServer {
 					);
 				case "/api/issues":
 					return sendJson(response, 201, this.setIssue(body));
+				case "/api/amend": {
+					const result = this.amend({ ...(body as unknown as AmendInput), by: author(body.by) });
+					return sendJson(response, 201, { ...result, url: `${this.url}#${result.post.id}` });
+				}
+				case "/api/retract":
+					return sendJson(response, 201, this.retract({ ...(body as unknown as RetractInput), by: author(body.by) }));
 				case "/api/path": {
 					const item = this.itemById(String(body.item));
 					if (!item) throw new HttpError(404, `no item ${body.item}`);
@@ -503,13 +548,14 @@ export class DailiesServer {
 		throw new HttpError(404, `no ${path}`);
 	}
 
+	// Files a correction replaced still resolve: the page can show an entry as first recorded.
 	private itemById(id: string): Item | undefined {
-		return this.catalog.postOfItem(id)?.items.find((item) => item.id === id);
+		return this.catalog.item(id);
 	}
 
 	private findItem(sha256: string, ext: string): Item | undefined {
 		for (let index = this.catalog.posts.length - 1; index >= 0; index--) {
-			const item = this.catalog.posts[index]!.items.find((candidate) => candidate.sha256 === sha256 && candidate.ext === ext);
+			const item = this.catalog.itemsOf(this.catalog.posts[index]!.id).find((candidate) => candidate.sha256 === sha256 && candidate.ext === ext);
 			if (item) return item;
 		}
 		return undefined;

@@ -16,7 +16,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { AnswerEvent, Catalog, CommitRef, PostEvent, Store } from "./store.ts";
+import type { AnswerEvent, Catalog, CommitRef, Post, Store } from "./store.ts";
 
 function git(cwd: string, args: string[]): string | undefined {
 	try {
@@ -142,8 +142,8 @@ export interface IssueSummary {
 	title?: string;
 	status?: string;
 	url?: string;
-	entries: PostEvent[];
-	shown: PostEvent[];
+	entries: Post[];
+	shown: Post[];
 	answers: AnswerEvent[];
 }
 
@@ -153,7 +153,7 @@ export interface Summary {
 	project?: string;
 	issues: IssueSummary[];
 	/** Work without an issue, by branch. */
-	branches: { lane: string; entries: PostEvent[]; shown: PostEvent[]; answers: AnswerEvent[] }[];
+	branches: { lane: string; entries: Post[]; shown: Post[]; answers: AnswerEvent[] }[];
 	commits: { repository: string; commits: CommitRef[] }[];
 	transcripts: { session: string; path: string; modified: string }[];
 }
@@ -162,13 +162,14 @@ export interface Summary {
 export function collect(catalog: Catalog, store: Store, options: SummaryOptions): Summary {
 	const until = options.until ?? new Date().toISOString();
 	const inRange = (at: string) => at >= options.since && at <= until;
-	const posts = catalog.posts.filter((post) => inRange(post.at) && (!options.project || post.project === options.project));
+	// Entries read as corrected; retracted ones are left out.
+	const posts = catalog.posts.filter((post) => inRange(post.at) && !post.retracted && (!options.project || post.project === options.project));
 	const answers = catalog.history.filter(
 		(event): event is AnswerEvent => event.type === "answer" && event.by === "human" && inRange(event.at),
 	);
 	const issues = new Map<string, IssueSummary>();
-	const branches = new Map<string, { lane: string; entries: PostEvent[]; shown: PostEvent[]; answers: AnswerEvent[] }>();
-	const bucket = (post: PostEvent) => {
+	const branches = new Map<string, { lane: string; entries: Post[]; shown: Post[]; answers: AnswerEvent[] }>();
+	const bucket = (post: Post) => {
 		if (post.issue) {
 			const key = post.issue.toUpperCase();
 			let issue = issues.get(key);
@@ -226,16 +227,21 @@ function answerLine(catalog: Catalog, answer: AnswerEvent): string {
 
 /** The material as Markdown, for an agent (or a person) to write the summary from. */
 export function summaryMarkdown(catalog: Catalog, store: Store, summary: Summary): string {
-	const files = (post: PostEvent, ids: string[]) =>
+	const files = (post: Post, ids: string[]) =>
 		ids
 			.map((id) => post.items.find((item) => item.id === id))
 			.filter(Boolean)
 			.map((item) => `${item!.name} (${store.blobPath(item!.sha256, item!.ext)})`);
 	const lines = [`# Devlog material ${summary.since.slice(0, 16)} → ${summary.until.slice(0, 16)}${summary.project ? ` (${summary.project})` : ""}`, ""];
-	const section = (heading: string, group: { entries: PostEvent[]; shown: PostEvent[]; answers: AnswerEvent[] }) => {
+	const section = (heading: string, group: { entries: Post[]; shown: Post[]; answers: AnswerEvent[] }) => {
 		lines.push(heading, "");
 		for (const entry of group.entries) {
 			lines.push(`### ${entry.title ?? "(untitled)"} — ${entry.at.slice(0, 16)} (${entry.id})`);
+			const edits = entry.amended ?? [];
+			if (edits.length) {
+				const last = edits.at(-1)!;
+				lines.push(`(Corrected${edits.length > 1 ? ` ${edits.length} times` : ""}, last ${last.at.slice(0, 16)}${last.reason ? `: ${last.reason}` : ""})`);
+			}
 			if (entry.devlog?.summary) lines.push("", entry.devlog.summary.trim());
 			if (entry.devlog?.craft) lines.push("", "Craft (工夫):", entry.devlog.craft.trim());
 			if (entry.devlog?.struggle) lines.push("", "Struggle (苦労):", entry.devlog.struggle.trim());

@@ -232,6 +232,51 @@ test("an issue is recorded once per change, and an agent's fields merge with the
 	assert.ok(state.tree.length > 0);
 });
 
+test("a devlog entry is corrected and retracted through the viewer, which tells open pages", async () => {
+	const entry = await post<{ post: PostView }>("/api/posts", {
+		project: "game",
+		lane: "main",
+		title: "Cape",
+		items,
+		kind: "devlog",
+		devlog: { summary: "Thicker.", before: [items[0]!.id], after: [items[1]!.id] },
+	});
+	assert.equal(entry.status, 201);
+	const id = entry.body.post.id;
+	const devlogCount = async () => ((await (await fetch(`${base}/api/tree?mode=devlog`)).json()) as { counts: { devlog: number } }).counts.devlog;
+	const count = await devlogCount();
+
+	let made: { status: number; body: { post: PostView; url: string } } | undefined;
+	const [pushed] = await collect("/api/events", "amend", 1, async () => {
+		made = await post<{ post: PostView; url: string }>("/api/amend", { post: id, title: "A thicker cape", devlog: { before: [] }, reason: "wrong before", by: "agent" });
+	});
+	assert.equal(made!.status, 201);
+	assert.match(made!.body.url, new RegExp(`#${id}$`));
+	assert.equal((pushed as { post: PostView }).post.title, "A thicker cape");
+	const state = (await (await fetch(`${base}/api/state?mode=devlog`)).json()) as { posts: PostView[] };
+	const shown = state.posts.find((candidate) => candidate.id === id)!;
+	assert.equal(shown.title, "A thicker cape");
+	assert.deepEqual(shown.devlog?.before, []);
+	assert.deepEqual(shown.amended?.map((note) => note.reason), ["wrong before"]);
+	assert.equal(shown.original?.title, "Cape");
+	// The file the correction took out is still served, for the entry as first recorded.
+	assert.equal((await fetch(`${base}/files/${items[0]!.id}/left.png`)).status, 200);
+
+	assert.equal((await post("/api/amend", { post: "p_nope", title: "x" })).status, 404);
+	assert.equal((await post("/api/amend", { post: server.catalog.posts[0]!.id, title: "x" })).status, 400);
+	assert.equal((await post("/api/amend", { post: id, reason: "nothing else" })).status, 400);
+	assert.equal((await post("/api/amend", { post: id, title: "x" }, { origin: "https://evil.example" })).status, 403);
+
+	const [gone] = await collect("/api/events", "retract", 1, async () => {
+		assert.equal((await post("/api/retract", { post: id, reason: "twice", by: "agent" })).status, 201);
+	});
+	assert.equal((gone as { post: PostView }).post.retracted?.reason, "twice");
+	const after = (await (await fetch(`${base}/api/state?mode=devlog`)).json()) as { posts: PostView[] };
+	assert.equal(after.posts.some((candidate) => candidate.id === id), false);
+	assert.equal(await devlogCount(), count - 1);
+	assert.equal((await post("/api/retract", { post: id })).status, 400);
+});
+
 test("only a newer version (or stop on purpose) may shut the viewer down", async () => {
 	const { compareVersions, version } = await import("../src/config.ts");
 	assert.ok(compareVersions("0.10.0", "0.9.9") > 0);

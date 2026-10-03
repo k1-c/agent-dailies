@@ -197,6 +197,13 @@ issue are attached, and `devlog add` refuses work still on a branch. The Stop ho
 suggests an entry once after a merge lands; the agent decides whether one is worth it. Transcripts are copied at
 session start and end (`agent-dailies devlog sweep` by hand).
 
+A recorded entry can be corrected — `agent-dailies devlog edit <p_…> --before new.png
+--reason "the before was wrong"` (or `--title`, `--summary`, `--craft`, `--struggle`,
+`--decided`, `--after`, `--no-before`, `--no-after`, `--issue`) — or taken back with
+`agent-dailies devlog retract <p_…> [--undo]`. Nothing is rewritten or deleted: the
+correction is a new event in the log, applied to the entry wherever it is read, and the
+viewer marks the entry as edited (with the reason) and can show it as first recorded.
+
 ### Issue summaries
 
 agent-dailies talks to no tracker itself. Name a command that prints an issue as
@@ -225,8 +232,9 @@ can describe an issue with `agent-dailies issue <KEY> --title … --description 
 ```text
 $XDG_DATA_HOME/agent-dailies/        (~/.local/share/agent-dailies)
   blobs/<ab>/<sha256><ext>           files, once per content
-  log/<machine>.jsonl                append-only events: post (with its questions), comment, answer, issue
-                                     (and verdict: per-file marks from versions before 0.5)
+  log/<machine>.jsonl                append-only events: post (with its questions), comment, answer, issue,
+                                     amend and retract (corrections to a devlog entry; the entry's post
+                                     event is never rewritten), and verdict (per-file marks before 0.5)
   named/<item>/<original name>       hard links under the original names (copy path)
   derived/<sha256>.webm              videos converted for the browser
   transcripts/<project>/<session>.jsonl   Claude Code transcripts, kept
